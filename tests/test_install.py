@@ -5,7 +5,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-os.environ.setdefault('NX2A_HOME', tempfile.mkdtemp(prefix='nx2a_test_home_'))
+os.environ.setdefault('RE_NATIVE_HOME', tempfile.mkdtemp(prefix='nx2a_test_home_'))
 from porter import cli, datapack, install   # noqa: E402
 from porter.adb import Adb                  # noqa: E402
 from porter.upstream import BuildError, PROG   # noqa: E402

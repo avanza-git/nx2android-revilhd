@@ -61,14 +61,16 @@ static ANativeWindow *g_win;
 static VkImageView g_sview[8];
 // Where the game's picture lies in the window (fractions: x, y, width, height; aspect kept, black borders around it), for the front end's touch points, which hle_touch.c
 // takes relative to the picture: normalized by the whole window, a tap in Unpacking's 3040x1904 window (97 px borders) was off by up to 5% of the height
-static _Atomic uint32_t g_pic[4] = {0, 0, 1u << 20, 1u << 20};
-static void vk_pic_set(float x, float y, float w, float h) { atomic_store(&g_pic[0], (uint32_t)(x * (1 << 20))); atomic_store(&g_pic[1], (uint32_t)(y * (1 << 20))); atomic_store(&g_pic[2], (uint32_t)(w * (1 << 20))); atomic_store(&g_pic[3], (uint32_t)(h * (1 << 20))); }
+static _Atomic int32_t g_pic[4] = {0, 0, 1 << 20, 1 << 20};   // signed: with Picture zoom the picture's edges lie outside the window
+static void vk_pic_set(float x, float y, float w, float h) { atomic_store(&g_pic[0], (int32_t)(x * (1 << 20))); atomic_store(&g_pic[1], (int32_t)(y * (1 << 20))); atomic_store(&g_pic[2], (int32_t)(w * (1 << 20))); atomic_store(&g_pic[3], (int32_t)(h * (1 << 20))); }
 void dm_picture_rect(float r[4]) { for (int i = 0; i < 4; i++) r[i] = (float)atomic_load(&g_pic[i]) / (1 << 20); }
 __attribute__((weak)) int dm_overlay_visible(void) { return 0; }
 __attribute__((weak)) float dm_overlay_scale(void) { return 1; }
 __attribute__((weak)) void dm_overlay_knob(int stick, float *dx, float *dy) { (void)stick; *dx = *dy = 0; }
 __attribute__((weak)) int64_t dm_overlay_pressed(int ctl, uint64_t bit) { (void)ctl; (void)bit; return 0; }
+int dm_android_frame_limit(void);
 __attribute__((weak)) int dm_menu_state(void) { return -1; }
+__attribute__((weak)) int dm_picture_mode(void) { return OV_PIC_FIT; }   // front_android.c: the pause menu's Picture
 __attribute__((weak)) int dm_overlay_fps(void) { return 0; }   // front_android.c: the pause menu's Show FPS
 __attribute__((weak)) int dm_save_note(char *out, int cap) { if (cap > 0) out[0] = 0; return OVX_IDLE; }   // front_android.c: the save manager's rows
 __attribute__((weak)) int dm_save_rows(ov_srow rows[OVM_ROWS]) { (void)rows; return 0; }
@@ -371,8 +373,8 @@ static void cv_button(const ov_canvas *cv, const float b[4], const char *l, int 
 }
 // The pause menu (overlay_layout.h: the rows, the tabs, the slider's track), in the raster's panel rectangle. Its letters are as large as a row allows (0.30 of
 // its height, about 2.7 mm on a 6.7" phone and 3.6 mm on the 8.8" tablet) and smaller only when the widest row would not fit beside its control
-static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Mode", "Export save", "Import save", "Face buttons", "Resume", ""};
-static const char *const OVM_BUTTONS[OVM_N] = {[OVM_EDIT] = "Edit", [OVM_EXPORT] = "Export", [OVM_IMPORT] = "Import"};   // the rows that are a button: its word
+static const char *const OVM_LABELS[OVM_N] = {"Show gamepad", "Opacity", "Edit layout", "Rumble", "Show FPS", "Mode", "Export save", "Import save", "Face buttons", "Frame rate", "Skip doors (+)", "Save game", "Picture", "Resume", ""};
+static const char *const OVM_BUTTONS[OVM_N] = {[OVM_EDIT] = "Edit", [OVM_EXPORT] = "Export", [OVM_IMPORT] = "Import", [OVM_SAVE] = "Save"};   // the rows that are a button: its word
 static const char *const OVM_MODES[2] = {"Handheld", "Docked"};
 static const char *const OVM_PADS[2] = {"Position", "Label"};   // a controller's face buttons (front_android.c pad_labels)
 static void ov_menu_panel(const ov_canvas *cv, int st) {
@@ -383,7 +385,8 @@ static void ov_menu_panel(const ov_canvas *cv, int st) {
     for (; is > 1; is--) {   // the widest row: its label, a gap and its control
         float need = 0;
         for (int i = 0; i < OVM_RESUME; i++) {
-            float lw = cv_text_w(OVM_LABELS[i], is), cw = i == OVM_MODE ? 2 * (cv_text_w(OVM_MODES[0], is) + sh) : i == OVM_PAD ? 2 * (cv_text_w(OVM_PADS[0], is) + sh) : OVM_BUTTONS[i] ? cv_text_w(OVM_BUTTONS[i], is) + 2 * sh : sw + gap + cv_text_w("OFF", is);
+            if ((i == OVM_LIMIT && !DM_ANDROID_FRAME_LIMIT) || (i == OVM_DOORS && !DM_ANDROID_SKIP_DOORS) || (i == OVM_SAVE && !DM_ANDROID_SAVE_ANYWHERE)) continue;
+            float lw = cv_text_w(OVM_LABELS[i], is), cw = i == OVM_LIMIT ? cv_text_w("Unlimited", is) + 2 * sh : i == OVM_PICTURE ? cv_text_w("Stretch", is) + 2 * sh : i == OVM_MODE ? 2 * (cv_text_w(OVM_MODES[0], is) + sh) : i == OVM_PAD ? 2 * (cv_text_w(OVM_PADS[0], is) + sh) : OVM_BUTTONS[i] ? cv_text_w(OVM_BUTTONS[i], is) + 2 * sh : sw + gap + cv_text_w("OFF", is);
             need = fmaxf(need, i == OVM_OPACITY ? fmaxf(lw / 0.38f, cv_text_w("80%", is) / 0.14f) : lw + gap + cw + rh * 0.3f);
         }
         if (need <= rw && cv_text_w(OVM_TAB_NAMES[0], is) < rw / 2 - sh) break;
@@ -415,6 +418,20 @@ static void ov_menu_panel(const ov_canvas *cv, int st) {
             snprintf(v, sizeof v, "%s", x == OVX_BUSY ? "Exporting..." : x == OVX_DONE ? nm : x == OVX_NOSAVE ? "No save yet" : "Failed");
             while (vs > 1 && cv_text_w(v, vs) > rw - cv_text_w(OVM_LABELS[it], is) - gap - rh * 0.3f) vs--;
             cv_text(cv, x1 - cv_text_w(v, vs), cy, v, vs, x == OVX_FAILED ? C_ACCENT : C_WHITE);
+#if DM_ANDROID_SAVE_ANYWHERE
+        } else if (it == OVM_SAVE && dm_re_save_note() == RE_SAVE_REFUSED) {   // pressed outside free play
+            const char *v = "Not here"; cv_text(cv, x1 - cv_text_w(v, is), cy, v, is, C_ACCENT);
+#endif
+        } else if (it == OVM_PICTURE) {
+            static const char *const values[OV_PIC_N] = {"Fit", "Stretch", "Zoom"};
+            int m = dm_picture_mode(); float bw = cv_text_w("Stretch", is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f};
+            cv_button(cv, b, values[m >= 0 && m < OV_PIC_N ? m : 0], 0, 0);
+        } else if (it == OVM_LIMIT) {
+            const char *values[] = {"30 FPS", "60 FPS", "Unlimited"};
+            unsigned choice = (unsigned)st >> 29 & 3;
+            const char *v = values[choice < 3 ? choice : 0];
+            float bw = cv_text_w("Unlimited", is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f};
+            cv_button(cv, b, v, 0, 0);
         } else if (OVM_BUTTONS[it]) {   // a button
             float bw = cv_text_w(OVM_BUTTONS[it], is) + 2 * sh, b[4] = {x1 - bw, cy - rh * 0.30f, bw, rh * 0.60f}; cv_button(cv, b, OVM_BUTTONS[it], 0, 0);
         } else if (it == OVM_MODE || it == OVM_PAD) {   // two segments, the current one filled: handheld (performance) | docked (resolution); by position | by label
@@ -424,7 +441,7 @@ static void ov_menu_panel(const ov_canvas *cv, int st) {
             cv_rrect(cv, x0 + cur * segw, cy - hh / 2, x0 + (cur + 1) * segw, cy + hh / 2, hh / 2, C_ACCENT);
             for (int k = 0; k < 2; k++) cv_text(cv, x0 + k * segw + (segw - cv_text_w(seg[k], is)) / 2, cy, seg[k], is, k == cur ? C_WHITE : C_DIM);
         } else {   // a switch
-            int on = st >> (it == OVM_OVERLAY ? 0 : it == OVM_RUMBLE ? 1 : 3) & 1; float sx0 = x1 - sw;
+            int on = st >> (it == OVM_OVERLAY ? 0 : it == OVM_RUMBLE ? 1 : it == OVM_DOORS ? 19 : 3) & 1; float sx0 = x1 - sw;
             cv_rrect(cv, sx0, cy - sh / 2, x1, cy + sh / 2, sh / 2, on ? C_ACCENT : C_OFF);
             cv_disc(cv, on ? x1 - sh / 2 : sx0 + sh / 2, cy, sh / 2 - fmaxf(2, sh * 0.1f), on ? C_WHITE : C_KNOB_OFF);
             const char *word = on ? "ON" : "OFF"; cv_text(cv, sx0 - gap - cv_text_w(word, is), cy, word, is, on ? C_WHITE : C_DIM);
@@ -810,16 +827,28 @@ static int overlay_ready(VkCommandBuffer cb, uint32_t k, int menu) {   // k: thi
 // it cannot go out early. A frame that would not be ready in time moves the cadence to the first vsync it can make (a "resync": one longer frame, and from then on a vsync of
 // slack). The pause menu's redraws carry no time. DM_VK_PACE=0 (live) presents without times
 static uint64_t g_refresh_ns, g_pace_target, g_pace_ideal, g_pace_anchor, g_pace_n, g_pace_resync, g_pace_slip; static uint32_t g_pace_id; static int g_pace_on = 1;
+static int64_t g_pace_shift;   // DM_VK_PACE_SHIFT_US: added to each desired time (the compositor's own decision point between two vsyncs may lie where the pacer's half-vsync-early time does)
 static uint64_t mono_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec; }
+// The latch: how long before its vsync a frame must be ready. One vsync on most panels, but the display's presentation deadline when that is longer (front_android.c, from
+// Display.getPresentationDeadlineNanos), with a millisecond for the jitter: the Legion Y700 (2023) at 120 Hz has 11.5 ms, and Resident Evil's 30 fps frames, ready 12 ms before
+// their vsync, missed it one in fifteen times (shown a vsync late, the next one on time: 5 vsyncs then 3, p99 41.7 ms). DM_VK_PACE_LATCH_MS overrides it
+extern int64_t g_present_deadline_ns;
+static uint64_t pace_latch(void) {
+    const char *e = getenv("DM_VK_PACE_LATCH_MS"); if (e && atof(e) > 0) return (uint64_t)(atof(e) * 1e6);
+    uint64_t dl = g_present_deadline_ns > 0 ? (uint64_t)g_present_deadline_ns + 1000000 : 0;
+    return dl > g_refresh_ns ? dl : g_refresh_ns;
+}
 static void pace_reset(void) { g_pace_target = g_pace_ideal = g_pace_anchor = g_refresh_ns = 0; }
 static uint64_t pace_snap(uint64_t t) {   // the first vsync at or after t on the grid through the anchor
     uint64_t r = g_refresh_ns, a = g_pace_anchor;
     if (t <= a) return a - (a - t) / r * r;
     return a + (t - a + r - 1) / r * r;
 }
-static uint64_t pace_desired(double period) {   // the frame's desired present time (0 = none)
+static uint64_t pace_desired(double period) {
+    static double previous_period = -1;
+    if (period != previous_period) { previous_period = period; g_pace_target = 0; }   // the frame's desired present time (0 = none)
     if (!V.has_dtiming || !g_swap) return 0;
-    if (g_pace_n % 30 == 0) { const char *e = getenv("DM_VK_PACE"); g_pace_on = !(e && !atoi(e)); }
+    if (g_pace_n % 30 == 0) { const char *e = getenv("DM_VK_PACE"); g_pace_on = !(e && !atoi(e)); e = getenv("DM_VK_PACE_SHIFT_US"); g_pace_shift = e ? (int64_t)atoll(e) * 1000 : 0; }
     if (!g_refresh_ns || g_pace_n % 120 == 0) {
         VkRefreshCycleDurationGOOGLE rc; uint64_t was = g_refresh_ns;
         if (vkGetRefreshCycleDurationGOOGLE(V.dev, g_swap, &rc) == VK_SUCCESS && rc.refreshDuration > 1000000) g_refresh_ns = rc.refreshDuration;
@@ -830,11 +859,11 @@ static uint64_t pace_desired(double period) {   // the frame's desired present t
         for (uint32_t i = 0; i < np; i++) {
             present_time_record(pt[i].presentID, pt[i].actualPresentTime);
             if (pt[i].actualPresentTime > g_pace_anchor) g_pace_anchor = pt[i].actualPresentTime;
-            if (pt[i].desiredPresentTime && pt[i].actualPresentTime > pt[i].desiredPresentTime + g_refresh_ns) g_pace_slip++;   // went out a vsync or more after its own
+            if (pt[i].desiredPresentTime && pt[i].actualPresentTime > pt[i].desiredPresentTime + g_refresh_ns * 3 / 4) g_pace_slip++;   // went out after its vsync (its desired time is half a vsync before it)
         }
     g_pace_n++;
-    if (g_pace_n % 600 == 0) VKLOG("[perf] display timing: %llu frames, %llu resyncs, %llu shown a vsync or more after their time (cumulative)%s",
-                                   (unsigned long long)g_pace_n, (unsigned long long)g_pace_resync, (unsigned long long)g_pace_slip, g_pace_on ? "" : "; off (DM_VK_PACE=0)");
+    if (g_pace_n % 600 == 0) VKLOG("[perf] display timing: %llu frames, %llu resyncs, %llu shown after their vsync (cumulative); latch %.2f ms%s",
+                                   (unsigned long long)g_pace_n, (unsigned long long)g_pace_resync, (unsigned long long)g_pace_slip, pace_latch() / 1e6, g_pace_on ? "" : "; off (DM_VK_PACE=0)");
     if (!g_pace_on || !g_refresh_ns || !g_pace_anchor || period <= 0) { g_pace_target = 0; return 0; }
     // The earliest vsync this frame can make: its GPU work (submitted just before), the blit, then the latch a vsync before it is shown. When the cadence's next vsync is
     // earlier, the cadence restarts half a vsync further out than that, so the next frames have room for the jitter: restarting at the earliest itself made 31 long frames
@@ -844,9 +873,10 @@ static uint64_t pace_desired(double period) {   // the frame's desired present t
     // so a period that is not a whole number of vsyncs always rounded up (40 fps on a 60 Hz panel: 25 ms came out as 2 vsyncs every frame, 30 fps, on a Retroid Pocket 5)
     uint64_t now = mono_ns(), t = 0;
     if (g_pace_target) { g_pace_ideal += (uint64_t)(period * 1e9); t = pace_snap(g_pace_ideal - g_refresh_ns / 2); }
-    if (t < now + gpu + g_refresh_ns) { if (g_pace_target) g_pace_resync++; t = pace_snap(now + gpu + g_refresh_ns * 3 / 2); g_pace_ideal = t; }
+    uint64_t latch = pace_latch();
+    if (t < now + gpu + latch) { if (g_pace_target) g_pace_resync++; t = pace_snap(now + gpu + latch + g_refresh_ns / 2); g_pace_ideal = t; }
     g_pace_target = t;
-    return t - g_refresh_ns / 2;
+    return (uint64_t)((int64_t)(t - g_refresh_ns / 2) + g_pace_shift);
 }
 static void present_window(vkimg_t *im, const int crop[4], double period, uint64_t ticket) {   // period: the game's frame period (s); < 0 for a redraw (ticket 0)
     uint32_t k = g_pi++ % 8;
@@ -866,8 +896,19 @@ static void present_window(vkimg_t *im, const int crop[4], double period, uint64
     VkClearColorValue black = {{0, 0, 0, 1}}; VkImageSubresourceRange rg = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdClearColorImage(cb, tgt, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &rg);
     int cx = crop ? crop[0] : 0, cy = crop ? crop[1] : 0, cw = crop && crop[2] ? crop[2] : (int)im->w, ch = crop && crop[3] ? crop[3] : (int)im->h;
-    double s = fmin((double)g_sext.width / cw, (double)g_sext.height / ch); int dw = (int)(cw * s), dh = (int)(ch * s), dx = ((int)g_sext.width - dw) / 2, dy = ((int)g_sext.height - dh) / 2;
-    vk_pic_set((float)dx / g_sext.width, (float)dy / g_sext.height, (float)dw / g_sext.width, (float)dh / g_sext.height);
+    // the pause menu's Picture (overlay_layout.h OV_PIC_*): fit keeps the aspect with black borders; stretch fills the window; zoom keeps the aspect and fills the window,
+    // the source cut to the window's shape (a blit cannot write outside its target). The picture rectangle for the touch points is the whole picture's, outside the window with zoom
+    int W = (int)g_sext.width, H = (int)g_sext.height, pm = dm_picture_mode(), dw, dh, dx, dy;
+    if (pm == OV_PIC_STRETCH) { dw = W; dh = H; dx = dy = 0; vk_pic_set(0, 0, 1, 1); }
+    else if (pm == OV_PIC_ZOOM) {
+        double s = fmax((double)W / cw, (double)H / ch); int sw = (int)(W / s + 0.5), sh = (int)(H / s + 0.5);
+        sw = sw > cw ? cw : sw; sh = sh > ch ? ch : sh;
+        vk_pic_set((float)(-(cw - sw) / 2 * s / W), (float)(-(ch - sh) / 2 * s / H), (float)(cw * s / W), (float)(ch * s / H));
+        cx += (cw - sw) / 2; cy += (ch - sh) / 2; cw = sw; ch = sh; dw = W; dh = H; dx = dy = 0;
+    } else {
+        double s = fmin((double)W / cw, (double)H / ch); dw = (int)(cw * s); dh = (int)(ch * s); dx = (W - dw) / 2; dy = (H - dh) / 2;
+        vk_pic_set((float)dx / W, (float)dy / H, (float)dw / W, (float)dh / H);
+    }
     VkImageBlit b = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{cx, cy, 0}, {cx + cw, cy + ch, 1}}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {{dx, dy, 0}, {dx + dw, dy + dh, 1}}};
     if (vk_window_bottom_up()) { b.srcOffsets[0].y = cy + ch; b.srcOffsets[1].y = cy; }   // lower-left origin: the window image is stored bottom-up (gfx_vk_exec.c)
     if (im->layout == VK_IMAGE_LAYOUT_UNDEFINED) { barrier(cb, im->img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL); im->layout = VK_IMAGE_LAYOUT_GENERAL; }   // an imported frame buffer, first shown (gl_android.c)
@@ -1018,7 +1059,7 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     // Adreno 750 phone with a 60 Hz display), and where the display changes its mode for a vote, the switch itself lengthens the next frames (issue #45: 30-40 fps)
     static ANativeWindow *rate_win; static double rate_period, want_period; static uint64_t want_since;
     if (period != want_period) { want_period = period; want_since = g_presents; }
-    if (g_win && (g_win != rate_win || (period != rate_period && (period < rate_period || g_presents - want_since >= 60)))) { rate_win = g_win; rate_period = period; dm_perf_window(g_win, period > 0 ? 1.0 / period : 60); }
+    if (g_win && (g_win != rate_win || (period != rate_period && (dm_android_frame_limit() >= 0 || period < rate_period || g_presents - want_since >= 60)))) { rate_win = g_win; rate_period = period; dm_perf_window(g_win, period > 0 ? 1.0 / period : 0); }
     uint64_t n = ++g_presents;
     // without display times (no VK_GOOGLE_display_timing, no window, or none came back) the hand-over time stands in, as before: the governor's late check needs readings
     { int disp = V.has_dtiming && dm_front_window() && (n <= 240 || g_pres_recorded); struct timespec ts; if (!disp) clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -1098,6 +1139,8 @@ int mtl_link_active(void) { return 0; }
 int mtl_link_wait_tick(int vsyncs, uint64_t timeout_ns) { (void)vsyncs; (void)timeout_ns; return 0; }
 int mtl_has_window(void) { return dm_front_window() != NULL; }
 int mtl_display_hz(void) { return 60; }
-int mtl_fps_target(void) { return DM_GAME_FPS_TARGET > 0 ? DM_GAME_FPS_TARGET : 60; }
+int dm_android_frame_limit(void);
+int dm_fps_cutscene(void);
+int mtl_fps_target(void) { int limit = dm_android_frame_limit(); return limit >= 0 ? (limit == 30 || dm_fps_cutscene() ? 30 : 60) : DM_GAME_FPS_TARGET > 0 ? DM_GAME_FPS_TARGET : 60; }
 void mtl_xv_window_tex(uint64_t serial) { (void)serial; }
 void mtl_prog_release(prog_t *p) { (void)p; }

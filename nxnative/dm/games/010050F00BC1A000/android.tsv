@@ -1,0 +1,28 @@
+# Resident Evil (HD remaster) 1.0.0 (base game v0), SDK 5, MT Framework / NVN.
+# 2026-11-10: ported on macOS arm64 (19,060 shaders from sc/NX_64 root, Title and Game; a 14.6 GB data pack).
+# 2026-11-10: Lenovo Legion Y700 (2023) TB320FC, Snapdragon 8+ Gen 1, Adreno 730 (driver 0615.96), Android 15: boots to the title screen and its movies at 30 fps
+# (GPU 8.9 ms a frame, 670 MB), with sound (SDK 5's DeviceSink, hle_audren.c). On its 144 Hz panel a 30 fps game got a 48 Hz frame-rate override and judder;
+# the app now picks the 120 Hz mode (front_android.c display_mode) and paces to the panel's 11.5 ms presentation deadline (gfx_vk_present.c pace_latch).
+# Measured with devtools/perf_bench.py (budget devtools/perf_budgets/y700_2023.json): pacing jitter 7.0 -> 3.1 ms, 1% low 19.6 -> 23.7 fps, power 8.3 -> 7.1 W.
+# 2026-11-10: live frame limits tested through new-game setup and the opening mansion scene: SurfaceFlinger averages 30.0 / 60.0 FPS
+# (15 s samples); 60 FPS p50 16.67 ms, p99 24.99 ms, no stutters. Unlimited reaches about 62 FPS in menus.
+# Prerendered movies retain 30 FPS. Touch/controller selection, restart persistence and background/resume checked. Full gameplay and saves not validated.
+# 2026-11-11: TB320FC / Adreno 730 / Android 15: cold-loaded existing typewriter save slot 1 with Chris visible before opening status/map, and checked movement.
+# gfx_vk_tex.c now initializes prefilled ordinary 2D textures for tex_dirty_upload profiles; the room's R32F depth previously stayed zero and hid Chris.
+# Saved to empty slot 3 and cold-loaded it with the release build; Chris remained visible at 30/60 FPS, across dining-room camera changes and entering the west corridor.
+status	boots
+tested	1.0.0 Legion Y700 2023 TB320FC (Adreno 730, Android 15)
+package	org.nx2a.t010050f00bc1a000
+orientation	landscape
+requires	bcn
+
+# Live 30 / 60 / unlimited host pacing, with build-checked engine timing and movie gates.
+frame_limit	1
+
+# Optional Start (+) skip through the door controller normal completion path.
+# 2026-11-10: tested dining-room / west-corridor transitions in both directions on TB320FC, with Start during the animation.
+# Normal Start pause behavior, saved toggle, and 60 FPS selection retained; other door types not checked.
+skip_doors	1
+
+# The pause menu's Save game (Game tab): the game's own save screen opened where the player stands, without a typewriter or an ink ribbon (hle_re_save.c).
+save_anywhere	1

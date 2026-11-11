@@ -1,0 +1,33 @@
+{
+  "device": "Lenovo Legion Y700 (2023): Snapdragon 8+ Gen 1 (1x X2 3.19 GHz, 3x A710 2.75 GHz, 4x A510 1.8 GHz), Adreno 730, 12/16 GB LPDDR5X, 2560x1600 144 Hz, Android 13",
+  "note": "Starting thresholds for a 30 fps game; tighten after the first baseline run. A rule is {\"min\": x} and/or {\"max\": x} on a report path.",
+  "target_fps": 30,
+  "refresh_hz": [60, 120, 144],
+  "variants": {
+    "smoke": {
+      "frames.avg_fps": {"min": 29.5},
+      "frames.low1_fps": {"min": 27.0},
+      "frames.p99_ms": {"max": 40.0},
+      "frames.stutters_per_min": {"max": 5.0},
+      "system.first_frame_s": {"max": 15.0},
+      "system.peak_pss_mb": {"max": 6144},
+      "perf_log.fps_step_downs": {"max": 0}
+    },
+    "soak": {
+      "frames.avg_fps": {"min": 29.5},
+      "frames.low1_fps": {"min": 27.0},
+      "frames.p99_ms": {"max": 40.0},
+      "frames.stutters_per_min": {"max": 5.0},
+      "frames.drift_pct": {"min": -5.0},
+      "system.peak_pss_mb": {"max": 6144},
+      "system.max_thermal": {"max": 2},
+      "system.max_skin_c": {"max": 45.0},
+      "perf_log.fps_step_downs": {"max": 1}
+    },
+    "cold_cache": {
+      "frames.avg_fps": {"min": 28.0},
+      "frames.stutters_per_min": {"max": 20.0},
+      "system.first_frame_s": {"max": 45.0}
+    }
+  }
+}

@@ -13,10 +13,11 @@ PLATFORM = {'win32': 'windows', 'darwin': 'macos'}.get(sys.platform, 'linux') + 
 
 
 def tracked(prefix):
-    return [p for p in subprocess.run(['git', '-C', str(ROOT), 'ls-files', '-z', prefix], capture_output=True, text=True, check=True).stdout.split('\0') if p]
+    return [p for p in subprocess.run(['git', '-C', str(ROOT), 'ls-files', '--cached', '--others', '--exclude-standard', '-z', prefix], capture_output=True, text=True, check=True).stdout.split('\0') if p]
 
 
 def main():
+    subprocess.run([sys.executable, str(ROOT / 'devtools/source_audit.py')], check=True)
     if os.name == 'nt':   # the prebuilt launcher is flagged by Windows antivirus engines only
         sys.path.insert(0, str(ROOT / 'packaging'))
         import build_bootloader
@@ -27,7 +28,7 @@ def main():
         d = APP / f; d.parent.mkdir(parents=True, exist_ok=True); shutil.copy2(ROOT / f, d)
     for src, dst in (('packaging/INSTALL.md', 'INSTALL.md'), ('README.md', 'README.md'), ('docs/ARCHITECTURE.md', 'docs/ARCHITECTURE.md'), ('docs/DEVELOPMENT_GUIDE.md', 'docs/DEVELOPMENT_GUIDE.md'), ('nxnative/LICENSE', 'LICENSE')):
         (APP / dst).parent.mkdir(parents=True, exist_ok=True); shutil.copy2(ROOT / src, APP / dst)
-    shutil.copytree(ROOT / 'docs/images', APP / 'docs/images', dirs_exist_ok=True)   # the README's games table
+    shutil.copy2(ROOT / 'ATTRIBUTION.md', APP / 'ATTRIBUTION.md')
     ver = subprocess.run(['git', '-C', str(ROOT), 'describe', '--always', '--dirty'], capture_output=True, text=True).stdout.strip() or 'dev'
     (APP / 'VERSION').write_text(ver + '\n', encoding='utf-8')   # which commit the bundle was built from
     z = DIST / f'nx2android-{ver}-{PLATFORM}.zip'; z.unlink(missing_ok=True)

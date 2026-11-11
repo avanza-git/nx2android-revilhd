@@ -111,12 +111,14 @@ static void render_main(void *arg) {
 // hook below since that form has one (Balatro): the inner call started the render thread before the event form had created its event, and the outer call then logged a second
 // renderer. The inner call (t_in_open) goes straight to the SDK with the host's copy of the parameter, as it did before the form without an event was hooked
 static __thread int t_in_open;
+static int g_nmix;   // the renderer's mix buffer count (OpenAudioRenderer), the bound of a DeviceSink's input indices
 static Result ar_open(void **handle, void *ev, const uint8_t *param, void *work, size_t sz) {
     static Result (*orig_ev)(void **, void *, const uint8_t *, void *, size_t), (*orig)(void **, const uint8_t *, void *, size_t);
     if (!orig_ev) orig_ev = gsym("_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleEPNS_2os11SystemEventERKNS0_22AudioRendererParameterEPvm");
     if (!orig) orig = gsym("_ZN2nn5audio17OpenAudioRendererEPNS0_19AudioRendererHandleERKNS0_22AudioRendererParameterEPvm");
     if (t_in_open) return orig(handle, param, work, sz);
     uint8_t p[P_SIZE]; cpu_manual(p, param);
+    g_nmix = *(int32_t *)(param + 8);   // mix buffers: the bound of the DeviceSink's input indices (sink_fits)
     LOG("audren: OpenAudioRenderer%s rate %d samples per frame %d mix buffers %d submixes %d voices %d sinks %d effects %d splitters %d (original device %d mode %d → CPU / manual) work buffer %p+%#zx",
         ev ? "" : " (no event)", *(int32_t *)param, *(int32_t *)(param + 4), *(int32_t *)(param + 8), *(int32_t *)(param + 0xc), *(int32_t *)(param + 0x10), *(int32_t *)(param + 0x14),
         *(int32_t *)(param + 0x18), *(int32_t *)(param + 0x24), *(int32_t *)(param + P_DEVICE), *(int32_t *)(param + P_MODE), work, sz);
@@ -152,8 +154,22 @@ HLE_FORCE("_ZN2nn5audio18CloseAudioRendererENS0_19AudioRendererHandleE", "close 
 //   and every command body sits 8 bytes earlier. DeviceSink is still ID 0x14 but 0x140 bytes (written at sdk+0x23a7b0): +0x18 device name, +0x120 upsample buffer, +0x128 input count, +0x12c input
 //   indices. Walked as SDK 20, the first command's enabled / ID / size bytes read as a magic of 0x181901 and the game was silent. With no magic, that walk must stay inside the generated list
 // SDK 4.4.0 (Mario Kart 8 Deluxe, GenerateDeviceSinkCommand at sdk+0x19e690) has the SDK 6 header, and its DeviceSink is ID 0xf and 0x130 bytes: +0x14 device name, +0x118 upsample buffer,
-//   +0x120 input count, +0x124 input indices as bytes (s8). No 0x148-byte command, so the first full command list's one 0x130-byte command with 1 to 6 inputs is the sink (g_sink4)
-static int g_sink_id = 0x13, g_hdr6, g_hdr21, g_sink4;
+//   +0x120 input count, +0x124 input indices as bytes (s8). No 0x148-byte command, so the first full command list's one 0x130-byte command with 1 to 6 inputs is the sink (g_sink_cnt 0x120, g_sink_i8)
+// Any other SDK (Resident Evil HD, SDK 5: ID 0xf once, neither 0x148 nor 0x130 bytes): the sink is the command that names the output device ("MainAudioOut") in its first 0x40 bytes;
+//   its input count follows the name at a distance one of the known layouts has (+0x110 as SDK 8–21, +0x10c as SDK 4), with s16 or s8 indices (SDK 4 has s8, the others s16, and SDK 5
+//   has SDK 4's offsets with s16 indices: name +0x14, upsample buffer +0x118, count +0x120, indices +0x124, 0x138 bytes): the one reading whose count is 1 to 6
+//   and whose indices are distinct mix buffers of the renderer (g_nmix), when exactly one does. The upsample buffer is 8 bytes before the count and the indices right after it in every layout
+static int g_sink_id = 0x13, g_hdr6, g_hdr21, g_sink_cnt = 0x130, g_sink_i8;
+static int sink_in(const uint8_t *b, int j) { return g_sink_i8 ? ((const int8_t *)(b + g_sink_cnt + 4))[j] : ((const int16_t *)(b + g_sink_cnt + 4))[j]; }
+static int sink_fits(const uint8_t *b, int cnt, int i8) {
+    uint32_t n = *(const uint32_t *)(b + cnt); if (n - 1 >= 6) return 0;
+    for (uint32_t j = 0; j < n; j++) {
+        int v = i8 ? ((const int8_t *)(b + cnt + 4))[j] : ((const int16_t *)(b + cnt + 4))[j];
+        if (v < 0 || (g_nmix > 0 && v >= g_nmix)) return 0;
+        for (uint32_t k = 0; k < j; k++) if (v == (i8 ? ((const int8_t *)(b + cnt + 4))[k] : ((const int16_t *)(b + cnt + 4))[k])) return 0;
+    }
+    return 1;
+}
 static int cmd_size(const uint8_t *q) { return g_hdr21 ? *(const int16_t *)(q + 2) : g_hdr6 ? *(const int16_t *)(q + 4) : *(const int16_t *)(q + 6); }
 static int cmd_id(const uint8_t *q) { return g_hdr21 ? q[1] : g_hdr6 ? *(const int16_t *)(q + 6) : q[5]; }
 static int cmd_on(const uint8_t *q) { return g_hdr21 ? q[0] & 1 : g_hdr6 ? q[0x10] : q[4]; }
@@ -210,18 +226,40 @@ static int capture(const uint8_t *cl, size_t len, int16_t *dst) {
     }
     if (!hist_logged && ncmd > 4) {   // first full command list: command ID histogram and the sink ID check
         hist_logged = 1;
-        int hist[64] = {0}, cand = -1, ncand = 0, cand4 = -1, ncand4 = 0, sink_sz = 0x148 + sink_body(); const uint8_t *q = cl + 0x20; char line[512]; size_t o = 0;
+        int hist[64] = {0}, cand = -1, ncand = 0, cand4 = -1, ncand4 = 0, candn = -1, ncandn = 0, cntn = 0, i8n = 0, sink_sz = 0x148 + sink_body(); const uint8_t *q = cl + 0x20; char line[512]; size_t o = 0;
         for (uint32_t i = 0; i < ncmd && cmd_ok(q, cend); i++) {
             int sz = cmd_size(q); hist[cmd_id(q) & 63]++;
             if (sz == sink_sz && *(const uint32_t *)(q + 0x130 + sink_body()) - 1 < 6) { cand = cmd_id(q); ncand++; }
             if (g_hdr6 && sz == 0x130 && *(const uint32_t *)(q + 0x120) - 1 < 6) { cand4 = cmd_id(q); ncand4++; }
+            for (int no = 8; no + 12 <= 0x40 && no + 12 <= sz; no += 4)
+                if (!memcmp(q + no, "MainAudioOut", 12)) {
+                    const uint8_t *b = q + sink_body(); int base = no - sink_body();
+                    int fits = 0, fcnt = 0, fi8 = 0;   // every known name-to-count distance with either index width; exactly one must fit
+                    for (int v = 0; v < 4; v++) { int cnt = base + (v & 1 ? 0x10c : 0x110), i8 = v >> 1; if (cnt + 16 <= sz - sink_body() && sink_fits(b, cnt, i8)) { fits++; fcnt = cnt; fi8 = i8; } }
+                    if (fits == 1) { candn = cmd_id(q); ncandn++; cntn = fcnt; i8n = fi8; }
+                    break;
+                }
             q += sz;
         }
         for (int k = 0; k < 64; k++) if (hist[k]) o += snprintf(line + o, sizeof line - o, " %d×%d", k, hist[k]);
         LOG("audren: first-frame commands %u, by command ID: %s", ncmd, line);
         if (!hist[g_sink_id & 63] && ncand == 1) { LOG("audren: no command with ID %#x in the command list; the only 0x148-byte command is ID %#x, taking it as DeviceSink", g_sink_id, cand); g_sink_id = cand; }
-        else if (!hist[g_sink_id & 63] && !ncand && ncand4 == 1) { LOG("audren: no command with ID %#x in the command list; the only 0x130-byte command is ID %#x, taking it as the SDK 4 DeviceSink", g_sink_id, cand4); g_sink_id = cand4; g_sink4 = 1; }
-        else if (!hist[g_sink_id & 63]) LOG("[RED] audren: no DeviceSink (ID %#x) in the command list, %d commands of %#x bytes: the game will have no sound", g_sink_id, ncand, sink_sz);
+        else if (!hist[g_sink_id & 63] && !ncand && ncand4 == 1) { LOG("audren: no command with ID %#x in the command list; the only 0x130-byte command is ID %#x, taking it as the SDK 4 DeviceSink", g_sink_id, cand4); g_sink_id = cand4; g_sink_cnt = 0x120; g_sink_i8 = 1; }
+        else if (!hist[g_sink_id & 63] && ncandn == 1) { LOG("audren: no command with ID %#x in the command list; ID %#x names the output device, taking it as DeviceSink (input count at +%#x, %s indices)", g_sink_id, candn, cntn, i8n ? "s8" : "s16"); g_sink_id = candn; g_sink_cnt = cntn; g_sink_i8 = i8n; }
+        else if (!hist[g_sink_id & 63]) {
+            LOG("[RED] audren: no DeviceSink (ID %#x) in the command list, %d commands of %#x bytes, %d naming the output device: the game will have no sound", g_sink_id, ncand, sink_sz, ncandn);
+            char sl[512]; size_t so = 0; int seen[64] = {0}; const uint8_t *r = cl + 0x20;   // each command ID's size once, to find the sink of a new SDK's layout
+            for (uint32_t i = 0; i < ncmd && cmd_ok(r, cend); i++) { int id = cmd_id(r) & 63; if (!seen[id]++) so += snprintf(sl + so, sizeof sl - so, " %d:%#x", id, cmd_size(r)); r += cmd_size(r); }
+            LOG("audren: command sizes by ID:%s", sl);
+            r = cl + 0x20;   // the bytes of the largest command that appears once, the likeliest sink
+            const uint8_t *big = NULL;
+            for (uint32_t i = 0; i < ncmd && cmd_ok(r, cend); i++) { if (cmd_size(r) >= 0x100 && hist[cmd_id(r) & 63] == 1 && (!big || cmd_size(r) > cmd_size(big))) big = r; r += cmd_size(r); }
+            for (int o2 = 0; big && o2 < cmd_size(big); o2 += 32) {
+                char hx[100]; size_t ho = 0;
+                for (int k = 0; k < 32 && o2 + k < cmd_size(big); k++) ho += snprintf(hx + ho, sizeof hx - ho, "%02x", big[o2 + k]);
+                LOG("audren: command ID %d +%#05x %s", cmd_id(big), o2, hx);
+            }
+        }
     }
     const uint8_t *c = cl + 0x20;
     for (uint32_t i = 0; i < ncmd; i++) {
@@ -229,9 +267,9 @@ static int capture(const uint8_t *cl, size_t len, int16_t *dst) {
         if (!cmd_ok(c, cend)) { if (!logged++) LOG("[RED] audren: command %u in the command list is malformed (first word %#x size %d)", i, *(const uint32_t *)c, size); return 0; }
         if (cmd_id(c) == g_sink_id && cmd_on(c)) {
             const uint8_t *b = c + sink_body();
-            uint32_t nin = *(const uint32_t *)(b + (g_sink4 ? 0x120 : 0x130)); int16_t in[6];
-            for (uint32_t j = 0; j < 6; j++) in[j] = g_sink4 ? ((const int8_t *)(b + 0x124))[j] : ((const int16_t *)(b + 0x134))[j];
-            const int32_t *up = *(const int32_t *const *)(b + (g_sink4 ? 0x118 : 0x128));
+            uint32_t nin = *(const uint32_t *)(b + g_sink_cnt); int16_t in[6];
+            for (uint32_t j = 0; j < 6; j++) in[j] = (int16_t)sink_in(b, j);
+            const int32_t *up = *(const int32_t *const *)(b + g_sink_cnt - 8);
             if (!logged++) LOG("audren: DeviceSink inputs %u (%d %d …) rate %u samples per frame %u mix buffer %p upsample buffer %p%s", nin, nin ? in[0] : -1, nin > 1 ? in[1] : -1, rate, samples, (void *)mix, (void *)up,
                                rate == 32000 ? " (32 kHz: resampled to 48 kHz on the host)" : "");
             if (!nin || samples > (rate == 48000 ? FRAME_MAX : FRAME_MAX * 2 / 3 - 1)) return 0;
@@ -270,7 +308,7 @@ static _Atomic uint64_t g_updates, g_renders, g_catchups;
 //   +0x48 rendering device and +0x4c execution mode, both must be 1; +0xf8 / +0x100 command buffer start / length), GenerateCommand takes a Span<std::byte> and returns a Span (x0 start, x1 length: the generated command list),
 //   and the mutex UpdateImpl holds is at +0x2d0 (+0x1f0 in SDK 16). The layout is recognized by the presence of the Span version of GenerateCommand
 typedef struct { uint8_t *p; size_t n; } span_t;
-// The update lock before SDK 19 is the one AudioRenderSystem::Update takes at its start, read off the SDK's own code: nn::os::LockMutex(MutexType*) at +0x1f8 in SDK 3.5.1 (OCTOPATH TRAVELER), +0x1d0 in SDK 4.4.0 (Mario Kart 8 Deluxe)
+// The update lock before SDK 19 is the one AudioRenderSystem::Update takes at its start, read off the SDK's own code: nn::os::LockMutex(MutexType*) at +0x1d0 in SDK 4.4.0 (Mario Kart 8 Deluxe)
 //   and at +0x1d8 in SDK 6.4–8.2, SdkMutexType::Lock at +0x1d8 in SDK 10.4–11.4, +0x1f0 in 13.3–16.2, +0x1f8 in 17.5 (the sdk builds of 24 games on hand; 19 and 20 inline it).
 //   The SDK 16 layout (SdkMutexType at +0x1f0) taken for all of them wrote a lock word into another field and excluded nothing. The prologue copies `this`, adds the offset into a register
 //   and moves it to x0 before the first bl, a PLT stub whose GOT slot the loader bound to one of the two functions; anything else keeps the SDK 16 layout
@@ -308,6 +346,7 @@ static Result render_once(uint8_t *sys, int16_t *dst, int *nout) {
     static span_t (*gen20)(void *, void *, size_t); static size_t mu_off;
     static void (*tmax)(void *, uint32_t), (*setup)(void *, const void *, size_t), (*process)(void *), (*lock)(void *), (*unlock)(void *);
     if (!process) {
+        lock = gsym("_ZN2nn2os12SdkMutexType4LockEv"); unlock = gsym("_ZN2nn2os12SdkMutexType6UnlockEv");
         gen20 = guest_sym("_ZN2nn5audio6server17AudioRenderSystem15GenerateCommandENS_4SpanISt4byteEE");
         if (!gen20) {
             mode = gsym("_ZNK2nn5audio6server17AudioRenderSystem16GetExecutionModeEv"); device = gsym("_ZNK2nn5audio6server17AudioRenderSystem18GetRenderingDeviceEv");
@@ -316,9 +355,7 @@ static Result render_once(uint8_t *sys, int16_t *dst, int *nout) {
         }
         mu_off = gen20 ? 0x2d0 : 0x1f0; g_sink_id = gen20 ? 0x14 : 0x13;
         int os_mutex = 0;
-        // SdkMutexType is looked up only when the SDK uses it: SDK 3.5.1 has none (OCTOPATH TRAVELER: LockMutex at +0x1f8)
         if (!gen20 && update_lock(&mu_off, &os_mutex) && os_mutex) { lock = gsym("_ZN2nn2os9LockMutexEPNS0_9MutexTypeE"); unlock = gsym("_ZN2nn2os11UnlockMutexEPNS0_9MutexTypeE"); }
-        else { lock = gsym("_ZN2nn2os12SdkMutexType4LockEv"); unlock = gsym("_ZN2nn2os12SdkMutexType6UnlockEv"); }
         LOG("audren: AudioRenderSystem in the SDK %s layout (update lock %s at +%#zx)", gen20 ? "20" : "16", os_mutex ? "nn::os::MutexType" : "SdkMutexType", mu_off);
         tmax = gsym("_ZN2nn5audio3dsp20CommandListProcessor17SetProcessTimeMaxEj"); setup = gsym("_ZN2nn5audio3dsp20CommandListProcessor5SetupEPKvm");
         process = gsym("_ZN2nn5audio3dsp20CommandListProcessor7ProcessEv");

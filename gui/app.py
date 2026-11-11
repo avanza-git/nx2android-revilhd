@@ -312,7 +312,7 @@ class SetupTab(QWidget):
         hh = self.table.horizontalHeader(); hh.setSectionResizeMode(0, QHeaderView.ResizeToContents); hh.setSectionResizeMode(1, QHeaderView.ResizeToContents); hh.setSectionResizeMode(2, QHeaderView.Stretch)
         gl.addWidget(self.table)
         note = QLabel('A port needs the <b>Android NDK r27c</b>, the <b>.NET SDK 10</b> and, to install from here, Android <b>platform-tools</b>. '
-                      '<b>Download missing tools</b> fetches them from Google and Microsoft (about 1 GB) into your nx2android folder; or install them yourself and set their paths below. '
+                      '<b>Download missing tools</b> fetches them from Google and Microsoft (about 1 GB) into your resident-evil-native folder; or install them yourself and set their paths below. '
                       'Your <b>prod.keys</b> must come from your own Switch. Keys and game files never leave your computer except to your own device.')
         note.setWordWrap(True); note.setTextFormat(Qt.RichText); gl.addWidget(note)
         dl = QHBoxLayout(); self.dl_btn = QPushButton('Download missing tools'); self.dl_btn.clicked.connect(self.download)
@@ -340,7 +340,7 @@ class SetupTab(QWidget):
         if items is None: QMessageBox.warning(self, 'Download', 'Could not read the download lists from Google and Microsoft. Check the internet connection and try again.'); return
         if not items: QMessageBox.information(self, 'Download', 'Nothing to download: every tool is there.'); return
         rows = ''.join(f'<li><b>{it["name"]}</b> {it["version"]}, {size(it["size"])}, from {it["url"].split("/")[2]} (<a href="{it["license"]}">license</a>)</li>' for it in items)
-        box = QMessageBox(QMessageBox.Question, 'Download missing tools', f'<p>Download and unpack into your nx2android folder:</p><ul>{rows}</ul>'
+        box = QMessageBox(QMessageBox.Question, 'Download missing tools', f'<p>Download and unpack into your resident-evil-native folder:</p><ul>{rows}</ul>'
                           '<p>They come from their makers under their own licenses: downloading them means you accept those.</p>', QMessageBox.Yes | QMessageBox.No, self)
         box.setTextFormat(Qt.RichText)
         if box.exec() != QMessageBox.Yes: return
@@ -508,7 +508,7 @@ class SavesTab(QWidget):
 class Window(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('nx2android'); self.resize(980, 820)
+        self.setWindowTitle('Resident Evil Native'); self.resize(980, 820)
         self.tabs = QTabWidget()
         self.port = PortTab(self); self.setup = SetupTab(self); self.games = GamesTab(); self.saves = SavesTab()
         self.tabs.addTab(self.port, 'Port'); self.tabs.addTab(self.setup, 'Setup'); self.tabs.addTab(self.games, 'Games'); self.tabs.addTab(self.saves, 'Saves')
@@ -521,7 +521,7 @@ class Window(QMainWindow):
 
 
 def main(argv):
-    app = QApplication(argv); app.setApplicationName('nx2android'); app.setStyle('Fusion')
+    app = QApplication(argv); app.setApplicationName('resident-evil-native'); app.setStyle('Fusion')
     app.setWindowIcon(QIcon(str(Path(__file__).parent / 'icon.png')))   # docs/images/icon.svg, rendered by devtools/make_app_icon.py
     w = Window(); w.show()
     return app.exec()

@@ -99,7 +99,16 @@ uint64_t gate_dispatch(uint64_t ret_addr, uint64_t *regs);
 // Observation gates (rewriter OBS tables in the profiles' patches.py, applied by patch_nso.py; numbering matches): read-only callbacks, called on a gate hit once attached
 enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // Metroid Dread 2.1.0's movie request ring (hle_movie.c)
        OBS_UE_MALLOC = 21,                                       // DRAGON QUEST VII Reimagined 1.2.0: Unreal's allocator object just made (hle_uemalloc.c)
-       OBS_MAX = 22 };
+       OBS_RE_MOVIE_START = 22, OBS_RE_MOVIE_END = 23,          // Resident Evil 1.0.0 movie lifetime
+       OBS_RE_DOOR_EXEC = 24, OBS_RE_DOOR_FINAL = 25,        // Resident Evil door animation state machine
+       OBS_RE_SAVE_TICK = 26,                                    // Resident Evil aGame::move: the pause menu's Save game (hle_re_save.c)
+       OBS_MAX = 27 };
+// Resident Evil's Save game (hle_re_save.c, android.tsv save_anywhere): what the pause menu shows
+enum { RE_SAVE_IDLE, RE_SAVE_REFUSED, RE_SAVE_OPEN, RE_SAVE_CLOSED };
+int dm_re_save_request(void);    // 1: the save screen opens when the game goes on; 0: not here (not in free play)
+int dm_re_save_safe(void);       // the last frame before the menu opened was free play
+int dm_re_save_note(void);       // RE_SAVE_*
+void dm_re_save_note_clear(void);
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs));
 int gate_obs_present(int id);
 uint64_t now_ns(void);

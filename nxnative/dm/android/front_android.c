@@ -10,6 +10,7 @@
 #include "front.h"
 #include "dm_input.h"
 #include "overlay_layout.h"
+#include "frame_limit.h"
 #include "pixel_font.h"
 #include "saves_android.h"
 #include <math.h>
@@ -58,7 +59,87 @@ ANativeWindow *dm_front_window(void) { pthread_mutex_lock(&g_win_mu); ANativeWin
 static ANativeWindow *phone_window(void) { pthread_mutex_lock(&g_win_mu); ANativeWindow *w = g_win; pthread_mutex_unlock(&g_win_mu); return w; }
 int dm_external_active(void) { return atomic_load(&g_external_active); }
 __attribute__((weak)) void vk_window_lost(void) {}   // the backend lets go of the window's swapchain before the window goes
-static void on_window_created(ANativeActivity *a, ANativeWindow *w) { (void)a; pthread_mutex_lock(&g_win_mu); g_win = w; pthread_mutex_unlock(&g_win_mu); }
+// The display mode: the highest refresh rate of the panel at its current resolution that 60 divides, so 60, 30 and 20 fps all hold each frame for whole vsyncs. A window frame
+// rate alone (perf_android.c dm_perf_window) is not enough on every device: the Legion Y700 (2023, Android 15) kept its 144 Hz panel for a 30 fps game and gave the app a 48 Hz
+// frame-rate override instead, so frames alternated between one and two of its vsyncs (20.8 / 41.7 ms; p99 41.7 ms, 250 of 289 frames off their slot). The window's
+// preferredDisplayModeId is an app request, above the user's peak-rate setting: 120 Hz there. Set on the main thread (onNativeWindowCreated), as window attributes must be.
+// DM_DISPLAY_MODE: off = leave the mode to the system, <Hz> = the mode nearest that rate
+int64_t g_present_deadline_ns;   // the display's presentation deadline (Display.getPresentationDeadlineNanos): how long before its vsync a buffer must be ready (gfx_vk_present.c pace_desired)
+static int jx_main(JNIEnv *E) { if (!(*E)->ExceptionCheck(E)) return 0; (*E)->ExceptionClear(E); return 1; }
+// Immersive full screen: AWINDOW_FLAG_FULLSCREEN hides only the status bar, so the navigation bar and a tablet's taskbar (the Y700's, with its app icons) stayed over the
+// game's picture. Android 11+ (API 30): the window's WindowInsetsController hides the system bars, which a swipe from an edge shows for a moment
+// (BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE); older: the immersive-sticky system UI flags. The window also takes the display cutout's edges (LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES,
+// API 28). Android shows the bars again after a dialog, the recent apps or another app's window: done again when the window gets focus and on resume (main thread)
+static int g_sdk;
+static void immersive(ANativeActivity *a) {
+    JNIEnv *E = a->env; jobject act = a->clazz;
+    jclass cA = (*E)->GetObjectClass(E, act); jmethodID mWin = cA ? (*E)->GetMethodID(E, cA, "getWindow", "()Landroid/view/Window;") : NULL;
+    if (jx_main(E) || !mWin) return;
+    jobject win = (*E)->CallObjectMethod(E, act, mWin); jclass cW = (*E)->FindClass(E, "android/view/Window"); if (jx_main(E) || !win || !cW) return;
+    static int cut; if (!cut && g_sdk >= 28) {   // once: the attribute stays with the window
+        jclass cLp = (*E)->FindClass(E, "android/view/WindowManager$LayoutParams");
+        jmethodID mGet = (*E)->GetMethodID(E, cW, "getAttributes", "()Landroid/view/WindowManager$LayoutParams;"), mSet = (*E)->GetMethodID(E, cW, "setAttributes", "(Landroid/view/WindowManager$LayoutParams;)V");
+        jfieldID fCut = cLp ? (*E)->GetFieldID(E, cLp, "layoutInDisplayCutoutMode", "I") : NULL;
+        jobject lp = !jx_main(E) && mGet && mSet && fCut ? (*E)->CallObjectMethod(E, win, mGet) : NULL;
+        if (!jx_main(E) && lp) { (*E)->SetIntField(E, lp, fCut, 1); (*E)->CallVoidMethod(E, win, mSet, lp); cut = !jx_main(E); }
+    }
+    if (g_sdk >= 30) {
+        jmethodID mCtl = (*E)->GetMethodID(E, cW, "getInsetsController", "()Landroid/view/WindowInsetsController;");
+        jclass cT = (*E)->FindClass(E, "android/view/WindowInsets$Type"), cC = (*E)->FindClass(E, "android/view/WindowInsetsController");
+        if (jx_main(E) || !mCtl || !cT || !cC) return;
+        jmethodID mBars = (*E)->GetStaticMethodID(E, cT, "systemBars", "()I"), mHide = (*E)->GetMethodID(E, cC, "hide", "(I)V"), mBeh = (*E)->GetMethodID(E, cC, "setSystemBarsBehavior", "(I)V");
+        jobject ctl = (*E)->CallObjectMethod(E, win, mCtl); if (jx_main(E) || !ctl || !mBars || !mHide || !mBeh) return;
+        jint bars = (*E)->CallStaticIntMethod(E, cT, mBars);
+        (*E)->CallVoidMethod(E, ctl, mBeh, 2); (*E)->CallVoidMethod(E, ctl, mHide, bars);   // 2: BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (jx_main(E)) LOG("[RED] full screen: the system bars could not be hidden");
+    } else {
+        jmethodID mDecor = (*E)->GetMethodID(E, cW, "getDecorView", "()Landroid/view/View;"); jclass cV = (*E)->FindClass(E, "android/view/View");
+        jmethodID mUi = cV ? (*E)->GetMethodID(E, cV, "setSystemUiVisibility", "(I)V") : NULL; if (jx_main(E) || !mDecor || !mUi) return;
+        jobject dv = (*E)->CallObjectMethod(E, win, mDecor); if (jx_main(E) || !dv) return;
+        (*E)->CallVoidMethod(E, dv, mUi, 0x1706); jx_main(E);   // IMMERSIVE_STICKY | LAYOUT_FULLSCREEN | LAYOUT_HIDE_NAVIGATION | LAYOUT_STABLE | FULLSCREEN | HIDE_NAVIGATION
+    }
+}
+static void display_mode(ANativeActivity *a) {
+    const char *e = getenv("DM_DISPLAY_MODE"); int off = e && !strcmp(e, "off");
+    double want = e && !off ? atof(e) : 0;
+    JNIEnv *E = a->env; jobject act = a->clazz;
+    jclass cA = (*E)->GetObjectClass(E, act);
+    jmethodID mWin = (*E)->GetMethodID(E, cA, "getWindow", "()Landroid/view/Window;"), mWm = (*E)->GetMethodID(E, cA, "getWindowManager", "()Landroid/view/WindowManager;");
+    if (jx_main(E) || !mWin || !mWm) return;
+    jobject win = (*E)->CallObjectMethod(E, act, mWin), wm = (*E)->CallObjectMethod(E, act, mWm); if (jx_main(E) || !win || !wm) return;
+    jclass cWm = (*E)->FindClass(E, "android/view/WindowManager"), cD = (*E)->FindClass(E, "android/view/Display"), cM = (*E)->FindClass(E, "android/view/Display$Mode");
+    jclass cW = (*E)->FindClass(E, "android/view/Window"), cLp = (*E)->FindClass(E, "android/view/WindowManager$LayoutParams"); if (jx_main(E) || !cWm || !cD || !cM || !cW || !cLp) return;
+    jmethodID mDisp = (*E)->GetMethodID(E, cWm, "getDefaultDisplay", "()Landroid/view/Display;"), mMode = (*E)->GetMethodID(E, cD, "getMode", "()Landroid/view/Display$Mode;");
+    jmethodID mModes = (*E)->GetMethodID(E, cD, "getSupportedModes", "()[Landroid/view/Display$Mode;"), mId = (*E)->GetMethodID(E, cM, "getModeId", "()I");
+    jmethodID mW = (*E)->GetMethodID(E, cM, "getPhysicalWidth", "()I"), mH = (*E)->GetMethodID(E, cM, "getPhysicalHeight", "()I"), mHz = (*E)->GetMethodID(E, cM, "getRefreshRate", "()F");
+    jmethodID mGet = (*E)->GetMethodID(E, cW, "getAttributes", "()Landroid/view/WindowManager$LayoutParams;"), mSet = (*E)->GetMethodID(E, cW, "setAttributes", "(Landroid/view/WindowManager$LayoutParams;)V");
+    jfieldID fPref = (*E)->GetFieldID(E, cLp, "preferredDisplayModeId", "I"); if (jx_main(E) || !mDisp || !mMode || !mModes || !mId || !mW || !mH || !mHz || !mGet || !mSet || !fPref) return;
+    jobject d = (*E)->CallObjectMethod(E, wm, mDisp); jobject cur = d ? (*E)->CallObjectMethod(E, d, mMode) : NULL; jobjectArray ms = d ? (*E)->CallObjectMethod(E, d, mModes) : NULL;
+    if (jx_main(E) || !cur || !ms) return;
+    { jmethodID mDl = (*E)->GetMethodID(E, cD, "getPresentationDeadlineNanos", "()J"); jlong dl = mDl ? (*E)->CallLongMethod(E, d, mDl) : 0;
+      if (!jx_main(E) && dl > 0 && dl < 100000000) { g_present_deadline_ns = dl; LOG("[perf] display presentation deadline %.2f ms", dl / 1e6); } }
+    int cw = (*E)->CallIntMethod(E, cur, mW), ch = (*E)->CallIntMethod(E, cur, mH), cid = (*E)->CallIntMethod(E, cur, mId); float chz = (*E)->CallFloatMethod(E, cur, mHz);
+    int best = -1; float bhz = 0; char list[200]; size_t lo = 0;
+    for (jsize i = 0, n = (*E)->GetArrayLength(E, ms); i < n; i++) {
+        jobject m = (*E)->GetObjectArrayElement(E, ms, i); if (!m) continue;
+        int id = (*E)->CallIntMethod(E, m, mId), w = (*E)->CallIntMethod(E, m, mW), h = (*E)->CallIntMethod(E, m, mH); float hz = (*E)->CallFloatMethod(E, m, mHz); (*E)->DeleteLocalRef(E, m);
+        if (jx_main(E) || w != cw || h != ch) continue;
+        lo += snprintf(list + lo, lo < sizeof list ? sizeof list - lo : 0, " %.0f", hz);
+        double k = hz / 60.0; int fits = want > 0 ? 1 : (hz >= 59 && fabs(k - floor(k + 0.5)) < 0.01);
+        if (!fits) continue;
+        if (want > 0 ? (best < 0 || fabs(hz - want) < fabs(bhz - want)) : hz > bhz) { best = id; bhz = hz; }
+    }
+    if (off) { LOG("[perf] display mode: DM_DISPLAY_MODE=off, left to the system (%.0f Hz now)", chz); return; }
+    if (best < 0) { LOG("[perf] display mode: no mode of%s Hz that 60 divides, %.0f Hz kept", list, chz); return; }
+    jobject lp = (*E)->CallObjectMethod(E, win, mGet); if (jx_main(E) || !lp) return;
+    (*E)->SetIntField(E, lp, fPref, best); (*E)->CallVoidMethod(E, win, mSet, lp);
+    if (jx_main(E)) { LOG("[RED] [perf] display mode: setAttributes refused"); return; }
+    LOG("[perf] display mode %.0f Hz (mode %d of%s Hz; was %.0f Hz, mode %d)%s", bhz, best, list, chz, cid, want > 0 ? " by DM_DISPLAY_MODE" : "");
+}
+static void on_window_created(ANativeActivity *a, ANativeWindow *w) {
+    pthread_mutex_lock(&g_win_mu); g_win = w; pthread_mutex_unlock(&g_win_mu);
+    static ANativeActivity *moded; if (moded != a) { moded = a; display_mode(a); }   // the window's attributes outlive its surface: once per activity (a recreated one has a new window)
+}
 static void on_window_destroyed(ANativeActivity *a, ANativeWindow *w) { (void)a; (void)w; pthread_mutex_lock(&g_win_mu); g_win = NULL; pthread_mutex_unlock(&g_win_mu); vk_window_lost(); }
 JNIEXPORT void JNICALL Java_org_nx2a_ExternalActivity_externalSurface(JNIEnv *env, jclass cls, jobject surface) {
     (void)cls;
@@ -73,6 +154,18 @@ void dm_focus_set(int st); void dm_audio_suspend(int on); void guest_clock_freez
 // ---- settings (the pause menu's), kept in the files folder as KEY=VALUE lines ----
 static char g_root[512];
 static _Atomic int g_set_overlay = 1, g_set_rumble = 1, g_set_fps;   // the gamepad shown; rumble and tap vibration; the frame rate counter (top left)
+// -1 from the accessor leaves ports without this profile capability unchanged; 0 means unlimited.
+static _Atomic int g_set_skip_doors;
+int dm_android_skip_doors(void) { return DM_ANDROID_SKIP_DOORS && atomic_load(&g_set_skip_doors); }
+static _Atomic int g_set_frame_limit = 30;
+static _Atomic int g_set_picture;   // OV_PIC_* (overlay_layout.h): the pause menu's Picture
+int dm_picture_mode(void) { return atomic_load(&g_set_picture); }
+static void menu_picture(int dir) { atomic_store(&g_set_picture, ((atomic_load(&g_set_picture) + dir) % OV_PIC_N + OV_PIC_N) % OV_PIC_N); }
+int dm_android_frame_limit(void) { return DM_ANDROID_FRAME_LIMIT ? atomic_load(&g_set_frame_limit) : -1; }
+static void menu_frame_limit(int dir) {
+    atomic_store(&g_set_frame_limit, dm_frame_limit_next(atomic_load(&g_set_frame_limit), dir));
+    LOG("[perf] frame limit selected: %d (0 = unlimited)", atomic_load(&g_set_frame_limit));
+}
 static _Atomic int g_set_opacity = 60;   // the gamepad's opacity, percent (OV_OPACITY_MIN..MAX: the menu's Opacity slider)
 static _Atomic int g_set_grid;   // the layout editor's Snap to grid
 static _Atomic int g_set_labels = -1;   // a controller's face buttons by their label (1) or their position (0); -1: as env.txt says (pad_labels)
@@ -86,6 +179,9 @@ static void settings_load(void) {
     char p[600]; snprintf(p, sizeof p, "%s/settings.txt", g_root); FILE *f = fopen(p, "r"); char line[128];
     if (!f) return;
     while (fgets(line, sizeof line, f)) { int v; if (sscanf(line, "overlay=%d", &v) == 1) atomic_store(&g_set_overlay, v != 0); else if (sscanf(line, "rumble=%d", &v) == 1) atomic_store(&g_set_rumble, v != 0);
+        else if (sscanf(line, "skip_doors=%d", &v) == 1) atomic_store(&g_set_skip_doors, v == 1);
+        else if (sscanf(line, "picture=%d", &v) == 1) atomic_store(&g_set_picture, v >= 0 && v < OV_PIC_N ? v : OV_PIC_FIT);
+        else if (sscanf(line, "frame_limit=%d", &v) == 1) atomic_store(&g_set_frame_limit, dm_frame_limit_valid(v));
         else if (sscanf(line, "fps=%d", &v) == 1) atomic_store(&g_set_fps, v != 0);
         else if (sscanf(line, "docked=%d", &v) == 1) setenv("DM_OPMODE", v ? "1" : "0", 1);   // over env.txt's: the host reads it once, at its first query
         else if (sscanf(line, "opacity=%d", &v) == 1) atomic_store(&g_set_opacity, v < OV_OPACITY_MIN ? OV_OPACITY_MIN : v > OV_OPACITY_MAX ? OV_OPACITY_MAX : v);
@@ -108,6 +204,9 @@ static void settings_save(void) {
     FILE *f = fopen(tmp, "w"); if (!f) { LOG("[RED] cannot write %s", tmp); return; }
     fprintf(f, "overlay=%d\nrumble=%d\ndocked=%d\nfps=%d\nopacity=%d\ngrid=%d\n", atomic_load(&g_set_overlay), atomic_load(&g_set_rumble), dm_opmode() != 0, atomic_load(&g_set_fps),
             atomic_load(&g_set_opacity), atomic_load(&g_set_grid));
+    if (DM_ANDROID_SKIP_DOORS) fprintf(f, "skip_doors=%d\n", atomic_load(&g_set_skip_doors));
+    if (DM_ANDROID_FRAME_LIMIT) fprintf(f, "frame_limit=%d\n", atomic_load(&g_set_frame_limit));
+    fprintf(f, "picture=%d\n", atomic_load(&g_set_picture));
     if (atomic_load(&g_set_labels) >= 0) fprintf(f, "labels=%d\n", atomic_load(&g_set_labels));   // (only once the player chose: until then env.txt decides)
     for (int l = 0; l < 2; l++) for (int i = 0; i < OV_N; i++) {
         _Atomic int *c = g_cust[0][l][i]; int x = atomic_load(&c[0]), y = atomic_load(&c[1]), z = atomic_load(&c[2]);
@@ -138,7 +237,7 @@ static void on_pause(ANativeActivity *a) { (void)a; go_background(); }
 // Back in front, the game is out of focus until the window has the input focus again (Android sends it after onResume): without this it stayed OutOfFocus for good,
 // and Blasphemous 2's Unity, which asks for focus notifications, kept its title paused and ignored every press after a trip to another app. A window losing focus while in
 // front (a system dialog, the notification shade) is OutOfFocus as on the Switch's HOME overlay
-static void on_window_focus(ANativeActivity *a, int focused) { (void)a; if (atomic_load(&g_running) && !atomic_load(&g_bg)) dm_focus_set(focused ? 1 : 2); }
+static void on_window_focus(ANativeActivity *a, int focused) { if (focused) immersive(a); if (atomic_load(&g_running) && !atomic_load(&g_bg)) dm_focus_set(focused ? 1 : 2); }
 // A save manager's request, or a RomFS the app cannot read (romfs_readable), asked the app to end (ANativeActivity_onCreate): Activity.finish() when it is resumed, through JNI on the main thread.
 // ANativeActivity_finish, from onCreate or from here, left the activity on the screen (Y700, Android 16), and porter's am start -W waited out its timeout
 static int g_quit;
@@ -147,7 +246,7 @@ static void act_finish(ANativeActivity *a) {
     if (m) (*E)->CallVoidMethod(E, a->clazz, m);
     if (!m || (*E)->ExceptionCheck(E)) { (*E)->ExceptionClear(E); LOG("[RED] Activity.finish() failed: the app ends itself"); _exit(0); }
 }
-static void on_resume(ANativeActivity *a) { if (g_quit) { act_finish(a); return; } go_foreground(); }
+static void on_resume(ANativeActivity *a) { if (g_quit) { act_finish(a); return; } immersive(a); go_foreground(); }
 static void on_destroy(ANativeActivity *a) { (void)a; _exit(0); }   // one game per process
 
 // ---- input ----
@@ -449,13 +548,16 @@ int dm_menu_state(void) {
     if (atomic_load(&g_edit)) return OVE_ST | atomic_load(&g_ed_st);
     if (atomic_load(&g_sp_on)) return OVS_ST | (atomic_load(&g_sp_hi) + 1) << 4 | (atomic_load(&g_sp_ver) & 255) << 20;
     return atomic_load(&g_set_overlay) | atomic_load(&g_set_rumble) << 1 | (dm_opmode() != 0) << 2 | atomic_load(&g_set_fps) << 3 | (atomic_load(&g_menu_hi) + 1) << 4 |
-           atomic_load(&g_menu_tab) << 8 | atomic_load(&g_set_opacity) << 9 | atomic_load(&g_sv_st) << 20 | (atomic_load(&g_sv_n) & 15) << 24 | pad_labels() << 28;
+           atomic_load(&g_menu_tab) << 8 | atomic_load(&g_set_opacity) << 9 | atomic_load(&g_sv_st) << 20 | (atomic_load(&g_sv_n) & 15) << 24 | pad_labels() << 28 | atomic_load(&g_set_skip_doors) << 19 | (atomic_load(&g_set_frame_limit) == 30 ? 0 : atomic_load(&g_set_frame_limit) == 60 ? 1 : 2) << 29;
 }
 int dm_overlay_fps(void) { return atomic_load(&g_set_fps) && !atomic_load(&g_menu); }   // gfx_vk_present.c draws the counter (not while the menu holds the game)
 static void menu_open(int hi) {
     if (!atomic_load(&g_running) || atomic_exchange(&g_menu, 1)) return;
     atomic_store(&g_menu_hi, hi); g_menu_ptr = -1;
     if (atomic_load(&g_sv_st) != OVX_BUSY) atomic_store(&g_sv_st, OVX_IDLE);   // the last export's note goes (one still copying stays)
+#if DM_ANDROID_SAVE_ANYWHERE
+    dm_re_save_note_clear();
+#endif
     dm_input_set(0, 0, 0, 0, 0); dm_touch_set(NULL, 0); g_touch_btn = 0;   // nothing stays pressed in the game
     for (int i = 0; i < 16; i++) atomic_store(&g_press_t[i], 0);
     for (int s = 0; s < 2; s++) { atomic_store(&g_stick_t[s], 0); for (int a = 0; a < 2; a++) atomic_store(&g_knob[s][a], 0); }
@@ -484,6 +586,12 @@ static void ed_open(void); static void sp_open(void); static void save_export(vo
 static void menu_do(int item) {
     if (item == OVM_OVERLAY) { atomic_store(&g_set_overlay, !atomic_load(&g_set_overlay)); atomic_store(&g_overlay, 1); settings_save(); }
     else if (item == OVM_RUMBLE) { int on = !atomic_load(&g_set_rumble); atomic_store(&g_set_rumble, on); dm_haptics_android_set(on); settings_save(); }
+    else if (item == OVM_DOORS) { atomic_store(&g_set_skip_doors, !atomic_load(&g_set_skip_doors)); settings_save(); }
+    else if (item == OVM_LIMIT) { menu_frame_limit(1); settings_save(); }
+    else if (item == OVM_PICTURE) { menu_picture(1); settings_save(); }
+#if DM_ANDROID_SAVE_ANYWHERE
+    else if (item == OVM_SAVE) { dm_haptics_android_tap(); if (dm_re_save_request()) menu_close(); else dm_overlay_redraw(); return; }   // the save screen opens as the game goes on
+#endif
     else if (item == OVM_FPS) { atomic_store(&g_set_fps, !atomic_load(&g_set_fps)); settings_save(); }
     else if (item == OVM_MODE) { dm_set_opmode(dm_opmode() ? 0 : 1); settings_save(); }   // the game takes it when it goes on
     else if (item == OVM_PAD) { atomic_store(&g_set_labels, !pad_labels()); settings_save(); }   // at once (pad_labels)
@@ -531,6 +639,8 @@ static void menu_key(uint64_t bit) {   // a controller key pressed while the men
         for (int k = 0; k < OVM_ROWS; k++) { hi = hi < 0 ? (bit == DM_BTN_UP ? OVM_ROWS - 1 : 1) : (hi + (bit == DM_BTN_UP ? OVM_ROWS - 1 : 1)) % OVM_ROWS; if (ov_menu_item(tab, hi) >= 0) break; }
         atomic_store(&g_menu_hi, hi); dm_overlay_redraw();
     } else if ((bit == DM_BTN_LEFT || bit == DM_BTN_RIGHT) && item == OVM_OPACITY) { menu_opacity(atomic_load(&g_set_opacity) + (bit == DM_BTN_LEFT ? -5 : 5)); settings_save(); }
+    else if ((bit == DM_BTN_LEFT || bit == DM_BTN_RIGHT) && item == OVM_PICTURE) { menu_picture(bit == DM_BTN_LEFT ? -1 : 1); settings_save(); dm_overlay_redraw(); }
+    else if ((bit == DM_BTN_LEFT || bit == DM_BTN_RIGHT) && item == OVM_LIMIT) { menu_frame_limit(bit == DM_BTN_LEFT ? -1 : 1); settings_save(); dm_overlay_redraw(); }
     else if ((bit == DM_BTN_LEFT || bit == DM_BTN_RIGHT) && item == OVM_TAB) menu_tab(tab + (bit == DM_BTN_LEFT ? -1 : 1));
     else if (bit == DM_BTN_L || bit == DM_BTN_ZL || bit == DM_BTN_R || bit == DM_BTN_ZR) {
         menu_tab(tab + (bit == DM_BTN_L || bit == DM_BTN_ZL ? -1 : 1));
@@ -1181,6 +1291,7 @@ __attribute__((visibility("default"))) void ANativeActivity_onCreate(ANativeActi
     act->callbacks->onInputQueueCreated = on_queue_created; act->callbacks->onInputQueueDestroyed = on_queue_destroyed;
     act->callbacks->onPause = on_pause; act->callbacks->onResume = on_resume; act->callbacks->onWindowFocusChanged = on_window_focus; act->callbacks->onDestroy = on_destroy;
     ANativeActivity_setWindowFlags(act, AWINDOW_FLAG_KEEP_SCREEN_ON | AWINDOW_FLAG_FULLSCREEN, 0);
+    g_sdk = sdk; immersive(act);
     static int started; if (started++) return;   // a second onCreate (configuration change) keeps the running game
     snprintf(g_root, sizeof g_root, "%s", act->externalDataPath ? act->externalDataPath : act->internalDataPath);
     char p[700];

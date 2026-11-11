@@ -1,67 +1,19 @@
-# Installing nx2android
+# Running Resident Evil Native
 
-nx2android ports your own Nintendo Switch games to Android. This folder is the whole app: there is nothing to install with pip, and you need no programming. You need:
+This project is distributed as source. Follow the [root README](../README.md#build-locally) to install Python dependencies and run `python -m gui` or `python -m porter`.
 
-- a Windows PC, a Mac with Apple silicon (M1 or later), or a Linux PC (x64 or ARM; Ubuntu 24.04, Debian 13 or a similarly recent distribution), with about 30 GB free (the tools take 4 GB, a port about twice the game's size);
-- an Android device whose GPU is an **Adreno** (Snapdragon) or **Xclipse** (Exynos 2200 and later). Mali and PowerVR GPUs cannot run these games;
-- the game's files dumped from your own Switch (the base game NSP or XCI, its update and DLC, in one folder) and your **`prod.keys`** from the same Switch. The tool reads NSP and XCI files, and NSZ and XCZ files, which it decompresses while it ports (they need that much more free space for a while).
+## Optional desktop bundle
 
-## 1. Start the app
+Developers may create a local desktop bundle using the [development guide](../docs/DEVELOPMENT_GUIDE.md#building-the-bundle). No prebuilt bundle or APK is supplied by this source export. Internal bundle filenames remain `nx2android` for compatibility.
 
-Unzip `nx2android-<version>-windows-x64.zip` anywhere (a short path such as `C:\nx2android` is best) and start **nx2android.exe**. Windows may warn about an unknown app: choose *More info* → *Run anyway*.
+After building, run the executable in `dist/nx2android/`: `nx2android.exe` on Windows or `nx2android` on macOS/Linux. Keep its sibling folders together. The bundle still needs its own downloaded toolchains and your locally supplied keys and game dump.
 
-On a Mac, unzip `nx2android-<version>-macos-arm64.zip` (double-click it in Finder). The app is not signed by Apple, so macOS stops it: in Terminal, clear the download mark once, then start it:
+## Configure and port
 
-```
-xattr -dr com.apple.quarantine ~/Downloads/nx2android
-~/Downloads/nx2android/nx2android
-```
+1. In **Setup**, download missing tools or configure Android NDK r27c, .NET SDK 10, and platform-tools. Select your own `prod.keys`.
+2. In **Port**, choose the folder containing your Resident Evil HD 1.0.0 base-game dump. Start the port.
+3. Install the generated APK and data pack using the install option with an Android device connected and USB debugging enabled, or use `python -m porter install <ResidentEvil-data folder>` from source.
 
-On Linux, unzip `nx2android-<version>-linux-x64.zip` (PC) or `nx2android-<version>-linux-arm64.zip` and start **nx2android**:
+Desktop settings and signing material live in the separate `resident-evil-native` application-data directory. `RE_NATIVE_HOME` overrides it. Existing nx2android settings and signing keys are not imported. Back up existing saves before changing an installation or its signing key.
 
-```
-cd ~/Downloads/nx2android
-./nx2android
-```
-
-If the shell says *Permission denied* (some archive programs drop the executable mark when they extract), run `chmod +x nx2android` first. The app needs the system libraries of Ubuntu 24.04 or newer (glibc 2.39): it runs on recent Ubuntu and Mint, Debian 13 and later, Fedora, Arch and the like.
-
-A few antivirus engines may flag `nx2android.exe` (on VirusTotal, 3 of 69 flagged v0.1.1, with generic labels such as "Trojan.Stealer" or "BehavesLike.Injector"; Microsoft Defender, Kaspersky, ESET, BitDefender and the other large engines did not). It is a false positive: the app is a Python program packed with PyInstaller, whose small launcher unpacks a compressed archive of the program and runs it, which heuristic scanners mistake for a packed trojan. The app is not code-signed yet, which adds to the score. Its source is on the project's GitHub page, and you can build the same bundle yourself with `python packaging/build_bundle.py`.
-
-## 2. Setup tab (once)
-
-1. Click **Download missing tools**. The app downloads the Android NDK, the .NET SDK and Android platform-tools from Google and Microsoft (about 1 GB) into your nx2android folder. They come under their makers' licenses, which the dialog links to. If you already have them installed, set their paths instead.
-2. Set **prod.keys** to your keys file and click **Save and check**.
-3. Every line should now have a green ✓.
-
-## 3. Port tab
-
-1. Choose the game's folder. The card under it says which game it found and whether it can be ported: the **Games** tab lists the supported ones.
-2. Click **Port**. The first port of a game takes a while: extraction, rewriting the game's code, translating its shaders (2 to 6 minutes on a fast 20-thread PC with an SSD, much longer on a slow one or a hard disk). Later ports reuse what has not changed.
-3. The APK and the game's data folder (`<Game>-data`) appear in the game's folder. **Open output folder** shows them.
-
-## 4. Put it on the device
-
-With **USB debugging** on (Settings → About → tap *Build number* seven times, then Settings → Developer options → USB debugging) and the device plugged in, tick **Install on the device when done** before porting, or click **Install on device** afterwards. Allow the computer when the device asks.
-
-### The game is already on the device
-
-The data folder carries the game's own files, its RomFS (most of the game: often 7 to 18 GB). If the same version of the game is already on the device, dumped for an emulator or copied to the SD card, the app can read it from there instead, so the device keeps one copy. Type the folder of that dump's RomFS (the folder that holds the game's own folders, often called `romfs`) in **RomFS on the device** before you install, or install from the command line:
-
-```
-nx2android.exe -m porter install "<Game>-data" --romfs-at /sdcard/<path to the dump>/romfs
-```
-
-(`./nx2android -m porter …` on a Mac.) The installer checks that the folder holds exactly the game's files, gives the app **All files access** (the device does not ask you), does not copy the game's files, and deletes the copy an earlier install left in the app's folder. It compares the names and sizes of all the files, and the content of a sample of them, so a dump of another game version is refused. Later installs, from the app's **Install on device** button too, keep reading that folder; a port of a newer game version needs that version's folder (`--romfs-at` again, or the field). `--romfs-at app` (or `app` in the field) puts the files back in the app's own folder. A folder inside another app's `Android/data` cannot be used: Android lets no app read it. To put the game's files on the SD card instead, add `--romfs-push` (the **Push the game's RomFS into that folder** box) with an empty folder there.
-
-If the app closes at once and its `log.txt` says it lacks All files access, turn it on in Settings → Apps → the game → All files access (the app opens that page itself), or install again.
-
-## When something goes wrong
-
-The log at the bottom of the Port tab says why; lines in red are errors. Ask on the project's GitHub page (Issues), with the game's title ID, your device and the red lines. Never post your keys or game files.
-
-**The game crashes and its log shows "AllocateAddressRegion … refused (0x1803)".** The game's own log is `log.txt` in `/sdcard/Android/data/<package>/files/` on the device. Such a game takes its memory as address regions, and your game version needs more address space than the version the game's profile was tested with (for example the base game without its update). Port it again with a larger **Extra address space** on the Port tab (the ⓘ icon explains it), for example 16 GB, then 24 GB. **Auto** already gives 8 GB to a game version the profile was not tested with. The setting uses no memory on the device and does not change the speed. On the command line it is `--alias-headroom <GB>`.
-
-**A touch game does not take some touches.** The on-screen gamepad takes the touches on its buttons and sticks and near them, at the sides of the screen. Open the pause menu (the button at the top centre) and turn the gamepad off: every touch then goes to the game, except a touch on the menu button. For a new port, tick **Touch game** on the Port tab (`--touch`): the gamepad starts hidden. If the game still takes no touch, choose handheld mode in the pause menu: some games read touches only in handheld mode, as on the Switch.
-
-The command line is the same program: `nx2android.exe -m porter -h` (`./nx2android -m porter -h` on a Mac or Linux).
+Device requirements, controls, tested behavior, and limitations are listed in the [README](../README.md).

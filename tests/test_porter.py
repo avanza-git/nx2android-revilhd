@@ -4,7 +4,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-os.environ['NX2A_HOME'] = tempfile.mkdtemp(prefix='nx2a_test_home_')
+os.environ['RE_NATIVE_HOME'] = tempfile.mkdtemp(prefix='nx2a_test_home_')
 
 from porter import config, datapack, pipeline, profiles   # noqa: E402
 from porter.upstream import android_profile, game          # noqa: E402

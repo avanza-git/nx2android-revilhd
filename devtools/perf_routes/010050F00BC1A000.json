@@ -1,0 +1,8 @@
+{
+  "note": "Resident Evil HD: walk a loop in the current room from a loaded save (start the run in the mansion's main hall). Stick moves only, never A, so the save's story does not advance; DM_CTL lines need a --debug port. Fixed camera angles change as the character crosses room zones, which exercises the background swaps.",
+  "loop": true,
+  "steps": [
+    {"ctl": "LUp~0.8", "hold": 3}, {"ctl": "LRight~0.6", "hold": 2}, {"ctl": "LDown~0.8", "hold": 3},
+    {"ctl": "LLeft~0.6", "hold": 2}, {"ctl": "LUp~1.0", "hold": 4}, {"ctl": "LDown~1.0", "hold": 4}
+  ]
+}

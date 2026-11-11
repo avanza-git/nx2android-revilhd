@@ -1,6 +1,6 @@
 # Donkey Kong Country Returns HD (`01009D901BC56000`)
 
-Update 1.1.0 (v65536) over the base game, SDK 18.3.5. Unity 6000.0.28f1 IL2CPP with FMOD on NVN. Modules `main`, `subsdk0` (NintendoSDK_movie) and `sdk`; the SDK and movie module are the builds used by [Monster Train 2](../010051701FB46000/README.md) and [Super Mario Galaxy](../010099C022B96000/README.md). The base game is not registered or tested.
+Update 1.1.0 (v65536) over the base game, SDK 18.3.5. Unity 6000.0.28f1 IL2CPP with FMOD on NVN. Modules `main`, `subsdk0` (NintendoSDK_movie) and `sdk`; the SDK and movie module are the builds used by Monster Train 2 and Super Mario Galaxy. The base game is not registered or tested.
 
 Plays on the Mac at 60 fps: the title, a new save, the opening movie, the island and Jungle maps, and the opening of 1-1 Jungle Hijinxs (running, jumping, damage, losing a life and restarting). An unsigned IPA is built; iOS is untested.
 
@@ -9,7 +9,7 @@ Plays on the Mac at 60 fps: the title, a new save, the opening movie, the island
 | Setting | Where | Why |
 |---|---|---|
 | `sys_resource 0x1000000` | [`game.tsv`](game.tsv) | the NPDM declares 16 MB of system resource: virtual address memory |
-| 5 GB guest block: `mem_reserve 0x140000000`, `mem_alias 0x118000000`, `mem_stack 0x10000000`, `app_pool 0xCD500000` | `game.tsv` | Unity 6 reserves and commits its regions itself, without setting a heap, as [BALL x PIT](../010086A022444000/README.md) |
+| 5 GB guest block: `mem_reserve 0x140000000`, `mem_alias 0x118000000`, `mem_stack 0x10000000`, `app_pool 0xCD500000` | `game.tsv` | Unity 6 reserves and commits its regions itself, without setting a heap, as BALL x PIT |
 | `depth_mode zero` | `game.tsv` | the offline pipeline prebuild uses the near=0 convention the game sets at boot |
 | SDK node area 1 GB → 62 MB | `dm/tools/sdk_patches.py`, SDK build `60751516…` | the existing shared SDK patch leaves room for the game's address regions |
 | Unity 6 Shader layout | `dm/gfx/tools/unityfs.py` | no bundle supplies the stripped files' type tree; see [Shaders](#shaders) |
@@ -18,7 +18,7 @@ No game-code patch.
 
 ## Shaders
 
-- **Resolved:** the split stopped with `no bundle has a Shader type tree of the same hash to borrow`. The 214 Shader objects have hash `2ec7223dce3af4232b14ae1441bd7999`, the same as BALL x PIT's bundles. The shared reader now supplies that layout: [Unity Shader layouts written out for players without bundles](../../../docs/reference/shaders.md#unity-shader-layouts-written-out-for-players-without-bundles).
+- **Resolved:** the split stopped with `no bundle has a Shader type tree of the same hash to borrow`. The 214 Shader objects have hash `2ec7223dce3af4232b14ae1441bd7999`, the same as BALL x PIT's bundles. The shared reader now supplies that layout: Unity Shader layouts written out for players without bundles.
 - The layout matches the bundle tree in types, field order and alignment flags. Every Shader object and all 16 ComputeShader objects read to their exact ends; compute uses the existing 2022.3 layout (`bfdf63ab…`).
 - All 19,314 shaders build for Mac and iOS, with no unresolved binding or driver-bank read the host cannot fill. The prewarm seed has 280 entries (160 shaders, 110 render pipelines, 10 compute pipelines), covering the tested opening route. A clean Mac startup prepared every entry in 0.04 seconds with no missing key or red line.
 - 19,314 stage shaders: 9,596 vertex, 9,600 pixel, 117 compute and one geometry; 9,602 vertex/pixel pairs. Of these, 19,303 come from the loose serialized files under `Data/`, and 11 are the player's GLSLC outputs in `main`. RomFS has 362 files (12.50 GB), including 14 MP4 movies and 74 FMOD resource files.
@@ -53,4 +53,4 @@ The work folder is `<NSP folder>/01009D901BC56000-work`. `run/boot.py <log name>
 
 ## Found on this game
 
-- The stripped Unity 6 Shader layout, hash `2ec7223d…`: [shaders.md](../../../docs/reference/shaders.md#unity-shader-layouts-written-out-for-players-without-bundles).
+- The stripped Unity 6 Shader layout, hash `2ec7223d…`: shaders.md.

@@ -4,6 +4,9 @@
 // - ADPF (APerformanceHint, Android 13): the presenting thread reports how long each frame's work took against the frame period, so the
 //   CPU governor raises clocks before a frame runs late instead of after (the hint is ignored where the API is missing).
 #include <android/native_window.h>
+#include "frame_limit.h"
+int dm_android_frame_limit(void);
+int dm_fps_cutscene(void);
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -155,6 +158,8 @@ static int64_t work_pct(int q) {   // the q-th percentile of the last 64 frames'
 }
 static int64_t work_p95(void) { return work_pct(95); }
 uint64_t dm_present_period_adapt(uint64_t period) {
+    int limit = dm_android_frame_limit();
+    if (limit >= 0) { g_game_period = 0; return dm_frame_limit_period(limit, dm_fps_cutscene(), period); }
     if (g_adapt < 0) { const char *e = getenv("DM_ADAPTIVE_FPS"); g_adapt = !(e && !atoi(e)); }
     if (!g_adapt || !period) return period;
     g_game_period = period;
@@ -214,6 +219,7 @@ static int shown_late(void) {   // of the last 64 frames on screen, how many mis
     return m * 64 / n;
 }
 static void adapt_frame(int64_t work, int64_t now) {
+    if (dm_android_frame_limit() >= 0) return;
     // A long frame in which the replay and the GPU did next to nothing is a load (a loading screen, the game reading files on its main thread), not a frame the
     // rate could fit: it is not judged. Hades II's room changes gave ~10 frames of 28-680 ms with 0.3-0.4 ms of GPU work, the rate stepped down to 40 fps,
     // and each fight began at 40 until it climbed back 4 s later
@@ -277,8 +283,8 @@ void dm_perf_frame(double period) {
 
 // The window's frame rate: the game's rate, so the display can pick a mode it divides (60 / 120 Hz rather than 144 Hz for a 60 fps game).
 void dm_perf_window(ANativeWindow *w, double fps) {
-    if (!w || fps <= 0) return;
-    int r = ANativeWindow_setFrameRate(w, (float)fps, ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
+    if (!w || fps < 0) return;
+    int r = ANativeWindow_setFrameRate(w, (float)fps, fps > 0 ? ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_FIXED_SOURCE : ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
     LOG("[perf] window frame rate %.0f fps%s", fps, r ? " refused" : "");
 }
 

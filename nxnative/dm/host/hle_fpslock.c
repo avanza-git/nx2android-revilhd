@@ -162,7 +162,47 @@ static void imp_tick(uint8_t *base, int target) {
     }
 }
 
+#ifdef DM_ANDROID
+#include "android_profile.h"
+#include <stdatomic.h>
+int dm_android_frame_limit(void);
+static _Atomic int g_re_movie;
+static void re_movie_start(const uint64_t *regs) { (void)regs; atomic_store(&g_re_movie, 1); LOG("[fps] Resident Evil movie: 30 FPS"); }
+static void re_movie_end(const uint64_t *regs) { (void)regs; atomic_store(&g_re_movie, 0); LOG("[fps] Resident Evil movie ended"); }
+__attribute__((constructor)) static void re_movie_gates(void) {
+    if (!DM_ANDROID_FRAME_LIMIT) return;
+    gate_obs_set(OBS_RE_MOVIE_START, re_movie_start); gate_obs_set(OBS_RE_MOVIE_END, re_movie_end);
+}
+int dm_fps_cutscene(void) { return atomic_load(&g_re_movie); }
+static int re_frame_limit_tick(void) {
+    if (!DM_ANDROID_FRAME_LIMIT) return 0;
+    static uint8_t *base; static int checked;
+    if (!checked) {
+        checked = 1;
+        for (int i = 0; i < g_nmod; i++) if (!strcmp(g_mod[i].name, "main") && !strcmp(g_mod[i].build_id, "6bec9b23b09df46c315aa6f4bfacf91c") &&
+                gate_obs_present(OBS_RE_MOVIE_START) && gate_obs_present(OBS_RE_MOVIE_END)) base = g_mod[i].base;
+        if (!base) LOG("[RED] Resident Evil frame limit: incompatible build or missing movie gates; engine timing unchanged");
+    }
+    if (base) {
+        uint64_t obj; uint32_t cur, want;
+        // FPSLocker-Warehouse: [MAIN+0x1ec6cf0]+0x4c is the engine's float FPS lock.
+        // 62 at a 60 Hz target leaves headroom for host pacing; 30 restores the original cap.
+        float fps = dm_android_frame_limit() == 30 || dm_fps_cutscene() ? 30.0f : 62.0f;
+        memcpy(&want, &fps, 4);
+        if (rd((uint64_t)(uintptr_t)(base + 0x1ec6cf0), &obj, 8) && obj && rd(obj + 0x4c, &cur, 4) && cur != want) {
+            uint32_t *p = (uint32_t *)(uintptr_t)(obj + 0x4c);
+            dm_guest_write_prepare(p, 4); __atomic_store_n(p, want, __ATOMIC_RELAXED);
+            LOG("[fps] Resident Evil engine limit: %.0f", fps);
+        }
+    }
+    return 1;
+}
+#endif
+
 void dm_fps_lock_tick(void) {
+#ifdef DM_ANDROID
+    if (re_frame_limit_tick()) return;
+#endif
     static int state = -2, rows[NLOCKS], nrow, nlog[NLOCKS], target; static uint8_t *base; static const char *src;
     if (state == -1) return;
     if (state == -2) {

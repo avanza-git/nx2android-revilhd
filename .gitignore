@@ -26,3 +26,30 @@ title.keys
 
 # The player bundle (python packaging/build_bundle.py)
 /dist/
+
+# Source-only distribution and local settings
+*.nsp
+*.nsz
+*.xci
+*.xcz
+*.nca
+*.nso
+*.nro
+*.dmsv
+*.metallib
+*.dll
+*.dylib
+*.so
+*.a
+*.exe
+*.pyc
+*.pyo
+*.p12
+*.pem
+*.key
+*.keys
+**/bin/
+**/obj/
+**/gen/
+**/dmsh_xlate_bin/
+.DS_Store

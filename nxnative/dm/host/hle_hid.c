@@ -232,6 +232,7 @@ void dm_pad_players(uint32_t mask) {
     note_merged();
 }
 
+__attribute__((weak)) uint64_t dm_door_skip_buttons(uint64_t buttons) { return buttons; }
 static void fill(NpadState *s, uint32_t id, uint32_t style) {
     memset(s, 0, sizeof *s);
     s->sampling = atomic_fetch_add(&g_sampling, 1) + 1;
@@ -254,7 +255,7 @@ static void fill(NpadState *s, uint32_t id, uint32_t style) {
     if (s->ry > STICK_THRESH) b |= 1u << 21;
     if (s->rx > STICK_THRESH) b |= 1u << 22;
     if (s->ry < -STICK_THRESH) b |= 1u << 23;
-    s->buttons = b;
+    s->buttons = !pl ? dm_door_skip_buttons(b) : b;
     s->attributes = ATTR_CONNECTED | (id == NPAD_HANDHELD ? ATTR_WIRED | ATTR_LEFT_CONN | ATTR_LEFT_WIRED | ATTR_RIGHT_CONN | ATTR_RIGHT_WIRED : ATTR_LEFT_CONN | ATTR_RIGHT_CONN);
 }
 // GetNpadStates(out, n, id): newest first, n entries: the current state repeated with consecutive sampling numbers. The host keeps no history, but on hardware the

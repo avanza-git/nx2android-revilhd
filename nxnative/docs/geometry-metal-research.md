@@ -36,7 +36,7 @@ The output maxima and invocation counts were read from shader headers. Input top
 
 Probe artifacts remain beside the game, outside the repository:
 
-`/Volumes/T7/nsp/AI THE SOMNIUM FILES/010089B00D09C000-work/geometry-probe/`
+`<game-folder>/010089B00D09C000-work/geometry-probe/`
 
 This contains `Program.cs`, `Probe.csproj`, `translation.log`, `compile-results.json`, native GS GLSL, compute/passthrough SPIR-V and MSL, and Mac/iOS libraries. The small C# probe references the pinned binaries in this worktree's `dmsh_xlate_bin`; it does not rebuild or replace the production translator. It reads package records directly and uses float attribute defaults and deliberately separate helper/resource bindings. It is not the production reflection or binding ABI.
 

@@ -435,17 +435,22 @@ def pg_shader(d, label):
     return [(f'{label}#PGSO', st, ctl, code)]
 
 MTARC, MTSPK = b'ARC\0', b'SPK\0'
+# ARC version → (entry size, path length, offset of {stored length, length, data offset} in the entry, offset of the data offset)
+MTARC_LAYOUTS = {7: (0x90, 0x80, 0x84, 0x8c), 9: (0x54, 0x40, 0x44, 0x50)}
 def mtarc_members(d, label):
-    """Capcom's MT Framework archive (The Great Ace Attorney Chronicles: 447 '.arc' files under nativeNXx64): 'ARC\\0', u16 version 7, u16 entry count, then one 0x90-byte entry per file
-    {char path[128] ('\\\\'-separated, no extension), u32 type hash, u32 stored length, u32 length in the low 29 bits (flags above), u32 offset}; the data is a zlib stream, or stored when the
-    stored length equals the length. → (path, data) of each entry"""
+    """Capcom's MT Framework archive: 'ARC\\0', u16 version, u16 entry count, then one entry per file; the data is a zlib stream, or stored when the stored length equals the length.
+    Version 7 (The Great Ace Attorney Chronicles: 447 '.arc' files under nativeNXx64): 0x90-byte entries {char path[128] ('\\\\'-separated, no extension), u32 type hash, u32 stored length,
+    u32 length in the low 29 bits (flags above), u32 offset}. Version 9 (Resident Evil HD, 3,899 '.arc' files, 34,658 entries): 0x54-byte entries {char path[64], u32 type hash,
+    u32 stored length, u32 length, u32 flags (2 in every entry), u32 offset}. → (path, data) of each entry"""
     import zlib
     ver, n = struct.unpack_from('<HH', d, 4)
-    if ver != 7: red(f'{label}: ARC version {ver}: only version 7 is known')
+    if ver not in MTARC_LAYOUTS: red(f'{label}: ARC version {ver}: only versions {", ".join(map(str, sorted(MTARC_LAYOUTS)))} are known'); return
+    esz, plen, olen, ooff = MTARC_LAYOUTS[ver]
     for i in range(n):
-        o = 8 + 0x90 * i
-        path = d[o:o + 0x80].split(b'\0')[0].decode('latin-1')
-        csz, usz, off = struct.unpack_from('<3I', d, o + 0x84); usz &= 0x1fffffff
+        o = 8 + esz * i
+        path = d[o:o + plen].split(b'\0')[0].decode('latin-1')
+        csz, usz = struct.unpack_from('<2I', d, o + olen); usz &= 0x1fffffff
+        off = struct.unpack_from('<I', d, o + ooff)[0]
         data = d[off:off + csz] if csz == usz else zlib.decompress(d[off:off + csz])
         if len(data) != usz: red(f'{label}#{path}: {len(data):#x} bytes, the entry says {usz:#x}')
         yield path.replace('\\', '/'), data
@@ -454,8 +459,12 @@ def mtspk_shaders(d, label):
     """MT Framework's shader package ('SPK\\0'; The Great Ace Attorney Chronicles keeps its only one, sc\\NX_64\\root, in sa/NX_64/root.arc): after the package's tables every shader is a
     code area followed directly by its control section, back to back to the end of the file (230 vertex shaders, then 230 pixel shaders). Each control section names its code length (+0x704),
     so the code area is the bytes right before it, and every block must start where the previous one ended. The tables that say which vertex and pixel shaders the engine combines are not
-    read, so the shaders are paired as single-stage programs (separable_pairs)"""
-    out, end, c = [], None, d.find(CTL_MAGIC)
+    read, so the shaders are paired as single-stage programs (separable_pairs).
+    Resident Evil HD (SDK 5; sc\\NX_64\\root, Title and Game: 19,104 shaders) has the other order: each control section is followed directly by its code area, and a small record of the
+    next shader (the package's hash and its lengths, not read) lies between one shader's code and the next control section. The order is read off the first control section"""
+    c = d.find(CTL_MAGIC)
+    if c >= 0 and d[c + struct.unpack_from('<I', d, c + 0x20)[0]:][:4] == GFX_MAGIC: return mtspk_shaders_ctl_first(d, label, c)
+    out, end = [], None
     while c >= 0:
         nctl, ncode = struct.unpack_from('<I', d, c + 0x20)[0], struct.unpack_from('<I', d, c + 0x704)[0]
         a = c - ncode
@@ -467,6 +476,21 @@ def mtspk_shaders(d, label):
         out.append((f'{label}#MTSPK@{a:#x}', st, ctl, code))
         end = c + nctl; c = d.find(CTL_MAGIC, end)
     if end != len(d): red(f'{label} SPK: the last shader ends at {end}, not at the end of the package ({len(d):#x})')
+    return out
+
+def mtspk_shaders_ctl_first(d, label, c):
+    """mtspk_shaders for a package whose shaders are control section, then code area (its +0x704 length); records between shaders are skipped, but no two shaders may overlap"""
+    out, end = [], 0
+    while c >= 0:
+        nctl, ncode = struct.unpack_from('<I', d, c + 0x20)[0], struct.unpack_from('<I', d, c + 0x704)[0]
+        a = c + nctl
+        if c < end or d[a:a + 4] != GFX_MAGIC or a + ncode > len(d): red(f'{label} SPK control section @{c:#x}: its code area does not follow it')
+        ctl, code = d[c:a], d[a:a + ncode]
+        st = sph_stage(code)
+        why = check(label, st, ctl, code) if st else 'no stage in the SPH'
+        if why: red(f'{label} SPK @{a:#x}: {why}')
+        out.append((f'{label}#MTSPK@{a:#x}', st, ctl, code))
+        end = a + ncode; c = d.find(CTL_MAGIC, end)
     return out
 
 def mtarc_shaders(d, label, out):
@@ -1102,7 +1126,7 @@ def ue_legacy_jobs(files, parts=64):
 
 _PAKS = {}
 def ue_legacy_shaders(path, rel, names, out):
-    """Files of a legacy Unreal pak (ue_legacy_jobs), each decoded block by block with the game's own decoder (DRAGON QUEST XI S: LZ5; zlib blocks, OCTOPATH TRAVELER's, by uepak itself) and scanned for the shader records the engine keeps inline"""
+    """Files of a legacy Unreal pak (ue_legacy_jobs), each decoded block by block with the game's own decoder (DRAGON QUEST XI S: LZ5) and scanned for the shader records the engine keeps inline"""
     pk = _PAKS.get(path) or _PAKS.setdefault(path, uepak.Pak(path))
     for name in names:
         d = pk.read(name, decode=oodle)
@@ -1512,7 +1536,7 @@ def main():
     big = [j for p, r in files for j in (linkdata_jobs(p, r) or [])]   # Three Houses' 6.9 GB DATA1.bin: one job per range of entries, not one read of the whole file
     pak_jobs, paks = kpka_jobs(files)   # Monster Hunter Rise's PAKs: the newest copy of each path, in ranges of entries
     tr_jobs, trp = trpfs_jobs(files)   # Pokémon Legends: Z-A's Trinity packs (data.trpfs and its index data.trpfd), decoded by the game's own Oodle in the Mac host
-    ue_jobs, uep = ue_legacy_jobs(files)   # legacy Unreal paks: DRAGON QUEST XI S's decoded by the game's own LZ5 in the Mac host, OCTOPATH TRAVELER's zlib by uepak
+    ue_jobs, uep = ue_legacy_jobs(files)   # DRAGON QUEST XI S's legacy Unreal paks, decoded by the game's own LZ5 in the Mac host
     bd_jobs, bdts = bdt_jobs(files)   # Dark Souls Remastered's dvdbnd archives: the entries of each .bdt by its .bhd5 index, in ranges
     arc_jobs, arcs = smash_arc_jobs(files)   # Super Smash Bros. Ultimate's data.arc: its current files, in ranges
     pz_jobs, pkzs = pkz_jobs(files)   # Bayonetta 3's PKZ archives, Oodle Kraken decoded by the game's own decoder in the Mac host

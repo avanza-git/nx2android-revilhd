@@ -3,7 +3,7 @@ import ast, re, subprocess, sys
 from pathlib import Path
 
 R = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().parent.parent).resolve()
-files = subprocess.run(['git', '-C', str(R), 'ls-files'], capture_output=True, text=True, check=True).stdout.splitlines()
+files = subprocess.run(['git', '-C', str(R), 'ls-files', '--cached', '--others', '--exclude-standard'], capture_output=True, text=True, check=True).stdout.splitlines()
 fails, notes = [], []
 def check(name, ok, detail=''):
     print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f": {detail}" if detail else ''))
@@ -48,7 +48,7 @@ diff = subprocess.run(['git', '-C', str(R), 'log', '--format=%h', '--', 'nxnativ
 notes.append(f'{len(diff)} commits touch the shared core since the subtree')
 
 # 3. Game profiles: data only, android.tsv keys from the documented set
-KEYS = {'status', 'tested', 'package', 'orientation', 'requires', 'sysdata', 'setting', 'env', 'overlay'}
+KEYS = {'status', 'tested', 'package', 'orientation', 'requires', 'sysdata', 'setting', 'env', 'overlay', 'frame_limit', 'skip_doors', 'save_anywhere'}
 STATUS = {'playable', 'wip', 'boots', 'experimental'}
 bad = []
 for f in files:
@@ -133,10 +133,10 @@ check('no scripts/ folder left at the root', not any(f.startswith('scripts/') fo
 req = (R / 'requirements.txt').read_text(encoding='utf-8').lower()
 check('requirements.txt has lz4, capstone, pillow, PySide6', all(m in req for m in ('lz4', 'capstone', 'pillow', 'pyside6')))
 
-# 10b. Distribution: the launcher only dispatches (to the GUI, `-m porter`, or a tool's script), and the bundle takes only committed nxnative files
+# 10b. Distribution: the launcher only dispatches (to the GUI, `-m porter`, or a tool's script), and the bundle takes only versionable nxnative files
 launcher = (R / 'packaging/nx2android.py').read_text(encoding='utf-8')
 check('packaging/nx2android.py only dispatches', not ({i.split('.')[0] for i in imports('packaging/nx2android.py')} - {'multiprocessing', 'os', 'runpy', 'sys', 'ctypes', 'gui'}))
-check('the bundle copies only committed nxnative files', "tracked('nxnative')" in (R / 'packaging/build_bundle.py').read_text(encoding='utf-8'))
+check('the bundle copies only versionable nxnative files', "tracked('nxnative')" in (R / 'packaging/build_bundle.py').read_text(encoding='utf-8'))
 check('frozen porter finds nxnative beside the executable', "frozen" in (R / 'porter/paths.py').read_text(encoding='utf-8'))
 
 # 11. devtools: the device from device.json / NX2A_DEVICE, device.json not committed

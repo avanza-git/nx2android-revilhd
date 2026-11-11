@@ -1,6 +1,6 @@
 # Development guide
 
-How to run nx2android from the repository, build the player's bundle and send changes. Players need none of this: the [README](../README.md) and [packaging/INSTALL.md](../packaging/INSTALL.md) cover the app. How the pieces fit together: [ARCHITECTURE.md](ARCHITECTURE.md).
+Technical reference inherited from nx2android. For the supported Resident Evil workflow and isolated settings, start with the root README. Players need none of this: the [README](../README.md) and [packaging/INSTALL.md](../packaging/INSTALL.md) cover the app. How the pieces fit together: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Setup from the repository
 
@@ -56,16 +56,6 @@ python -m porter driver --system --package org.nx2a.supermario3dworld
 
 `--system` goes back to the device's own driver. How it works: [ARCHITECTURE.md](ARCHITECTURE.md#the-port).
 
-### Host update
-
-`porter host` brings a port on the device to this checkout's host (the runtime: Vulkan backend, front end, Horizon services), also without the game's files: its `libdmhost.so` is built again from the profile (a few seconds) and installed over the app (the saves stay):
-
-```
-python -m porter host --package org.nx2a.supermario3dworld
-```
-
-It refuses when the game's code on the device was rewritten with other rewriter sources than this checkout's; then port the game again from its files. The data pack is not changed. How it works: [ARCHITECTURE.md](ARCHITECTURE.md#the-port).
-
 ## Layout
 
 - `porter/`: the port pipeline (`python -m porter`).
@@ -78,11 +68,11 @@ It refuses when the game's code on the device was rewritten with other rewriter 
 
 ## Adding a game
 
-Each game is a profile in `nxnative/dm/games/<title ID>/` with an `android.tsv`: [ARCHITECTURE.md](ARCHITECTURE.md#adding-a-game). A finished port updates, in the profile's commit, the games table in the [README](../README.md#games) (its row, with a gameplay frame captured on the device in `docs/images/` and the tag of the nx2android version it was tested on) and [PORT_CHECKLIST.md](PORT_CHECKLIST.md).
+Each game is a profile in `nxnative/dm/games/<title ID>/` with an `android.tsv`: [ARCHITECTURE.md](ARCHITECTURE.md#adding-a-game). A finished port updates, in the profile's commit, the games table in the [README](../README.md#supported-version) (its row, with a gameplay frame captured on the device in `docs/images/` and the tag of the nx2android version it was tested on) and [PORT_CHECKLIST.md](PORT_CHECKLIST.md).
 
 ## Releases and version numbers
 
-The version is `0.MINOR.PATCH`. A release that only adds games and fixes bugs raises the patch version; a release with any other core change (a new feature or a change in behaviour) raises the minor version. The major version stays 0 while the project is early. A release checks only the games it adds or fixes, not the older ones; a break in an older game is fixed by a later patch release. The version is in `porter/__init__.py`, raised by a commit `chore(release): version <x.y.z>`.
+Source development is hosted at [avanza-git/nx2android-revilhd](https://github.com/avanza-git/nx2android-revilhd). There is no release publishing automation. Existing version constants describe inherited tools. Review source, attribution, tests, and the source audit before choosing a public version or publishing a release.
 
 ## Building the bundle
 
@@ -94,7 +84,13 @@ python packaging/build_bundle.py
 
 On Windows, `build_bootloader.py` compiles PyInstaller's launcher on this PC (it needs the Microsoft C++ Build Tools), because a few antivirus engines flag the prebuilt one every PyInstaller app shares. Run it again after installing or upgrading PyInstaller.
 
-`dist/nx2android/` and `dist/nx2android-<version>-<os>-<cpu>.zip` (`windows-x64`, `macos-arm64`, `linux-x64`, `linux-arm64`): the app, the committed `nxnative/` and the install guide; no toolchains, keys or game files. Publishing a release builds the macOS, Windows and Linux zips on GitHub's runners and attaches them (`.github/workflows/release-macos.yml`, `release-windows.yml`, `release-linux.yml`, which builds both Linux cpus on Ubuntu 24.04 (`ubuntu-latest` for x64, so the system libraries the bundle carries are never older than glibc 2.39); `--clobber` replaces a zip of the same name, so do not upload them by hand). Run either workflow by hand (Actions → Run workflow) for a test build of a branch, kept as the run's artifact.
+`dist/nx2android/` and its platform zip contain the app, non-ignored shared source, and notices. Bundle creation is a local manual step; this project has no release publishing workflows. Internal bundle names remain nx2android for compatibility. Run the source audit before packaging.
+
+## Updating an installed host
+
+`python -m porter host --package org.nx2a.t010050f00bc1a000` rebuilds and replaces the runtime in a compatible installed APK using the project's signing key. It keeps the installed driver, saves and data pack. The command requires matching profile identity and rewrite-source records; an older pack or changed game patches requires a full port. `--device`, `--jobs` and `--json` select the device, build parallelism and machine-readable output.
+
+Shader bundles and their expected/omitted inventories now have content receipts. Missing or changed products invalidate reuse. The cache and host-update behavior was selectively integrated from the pinned fork documented in [UPSTREAM_INTEGRATION.md](UPSTREAM_INTEGRATION.md).
 
 ## Android motion
 
@@ -158,40 +154,6 @@ completion before the next epoch. GPU-written segments must remain outside this
 immutable cache. Full descriptor-set key
 equality is separate; these tests do not measure device performance.
 
-Shader and translator reuse checks content receipts with relative output names,
-sizes and SHA-256 hashes, including translator dependencies. The bundle takes
-the fast path when size and modification time match on Windows. POSIX also
-checks change time and file identity. Changed metadata falls back to hashing,
-and matching contents refresh the recorded metadata. The Windows fast path can
-miss a same-size edit that preserves the original modification time.
-The shader key includes the translator's actual output bytes and the export helpers
-`shader_vk.py`, `dmsv.py` and `shader_products.py`; unrelated Android tools do not
-invalidate it. Inputs changing during generation stop publication. The changed key
-and receipt format make existing ports translate once before reuse resumes.
-
-The exporter records every expected shader (including geometry topology variants)
-and failed key/reason in `shaders.dmsv.report.json`. It checks SPIR-V framing and
-entry-point stage and requires reflection beside each emitted module. Valid
-products from an interrupted batch are kept. Missing or invalid outputs get a
-`[RED]` diagnostic. Before retrying integer vertex inputs, the exporter removes
-the first pass's outputs to prevent reuse of an incompatible input interface.
-`dmsv.write` reads each payload back and the runtime checks framing and reflection.
-The porter compares the emitted keys and stages with the expected and failed
-inventory and rejects an empty result before publishing the bundle, report or
-receipt. An export with at least one valid shader can be reused with unchanged
-inputs and products. The receipt records the failure count and the published
-report's digest. A missing or changed report or changed input triggers a rebuild.
-`test_shader_cache` and `test_shader_export_checks` exercise these contracts without
-game files or a GPU.
-
-Native harnesses discover Vulkan headers through `ANDROID_NDK_HOME` (or the
-porter tool installation). Set it to an installed NDK when the SDK is outside the
-usual locations. The POSIX probe uses mutexes and condition variables supported on
-macOS and Linux. Protected-page tests handle both SIGSEGV and macOS SIGBUS and
-keep their concurrent CPU writer checks; the zero-copy failure fixture supplies
-the current allocator context while forcing cache misses to exercise every
-allocation/import failure stage.
-
 `test_vk_copy_back` exercises protected guest memory with the real dirty-page tracker: preserving independent CPU writes in the same cache line, successive submissions and snapshot initialization, cached/uncached and untracked pools, 200 partial/unaligned/overlapping range cases, and writes from another CPU thread. It also injects failed and partially successful bulk `mprotect` calls; a bulk unprotect failure stops the host with a `[RED]` message before publishing writable page states or continuing the copy. It also checks snapshot copy volume across clean and dirty 64 KB blocks, a partial tail, and full versus partial completion merges. These CPU tests do not establish correct rendering on a device.
 
 `test_vk_memory_diagnostics` also checks per-buffer cached-memory compatibility, restricted memory-type masks, diagnostics disabled, and unchanged coherent memory selection. The candidate lookup is diagnostic; cached allocation requires the separate opt-in switch. `test_vk_cached_pools` injects creation, allocation, mapping and binding failures and verifies cleanup, coherent fallback, unsupported types, missing cache functions, default-off behaviour, device-loss handling and rejecting failed/timed-out GPU waits before readback. `test_vk_copy_back` also models separate CPU-cache/device bytes to check flush before GPU use, invalidate before merging, independent CPU writes, partial merges, clean submissions and fatal cache-maintenance errors. Cache-range tests check 5,000 generated ranges for both flush and invalidate, plus explicit boundary/overflow cases and multiple cache-atom sizes. Native readback tests cover empty/non-intersecting transfers, unaligned disjoint writes with independent CPU changes in the same atom, clipping at both pool ends, subsequent uploads/baselines, and full invalidation for uncertain writers. These mocks do not emulate an actual GPU driver.
@@ -242,7 +204,7 @@ The commits before 2026-10-28 predate the rule.
 
 ## nxnative
 
-`nxnative/` started as a squashed git subtree of [seedds/nxnative](https://github.com/seedds/nxnative) (upstream 6034fca, 2026-10-24). Since 2026-10-29 it is our own fork: no `git subtree pull`, cherry-pick or merge from upstream, and the repository has no `upstream` remote (removed 2026-10-31): `origin` is the only one. Upstream's profiles are still a good reference when bringing up a game it has; read them on GitHub (`https://github.com/seedds/nxnative/tree/main/dm/games/<title ID>`) and write our own.
+`nxnative/` is retained shared source from nx2android and nxnative. The initial local export had no commits; its source snapshot is now based on the fork's existing `main` history, with `origin` pointing to `avanza-git/nx2android-revilhd`. See [ATTRIBUTION.md](../ATTRIBUTION.md).
 
 The Vulkan driver pipeline cache (`vk_pipeline_cache.bin` under `DM_ROOT`) now has a
 versioned envelope containing the device, driver, API and UUID identity, a renderer

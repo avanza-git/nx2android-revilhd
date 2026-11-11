@@ -1,0 +1,41 @@
+# Resident Evil (HD remaster), Capcom MT Framework on SDK 5: profile from the survey (dm/games/profile_guess.py), checked against The Great Ace Attorney Chronicles (010036E00FB20000, the same engine).
+# ARC archives are version 9 (64-byte paths), and its three shader packages put each control section before its code (shader_split.py mtarc_members, mtspk_shaders).
+# Resident Evil, SDK 5, survey <NSP folder>/010050F00BC1A000_survey/survey.md
+
+# ---- Identity ----
+title_id	010050F00BC1A000
+program_id	010050F00BC1A000
+
+# ---- App ----
+name	Resident Evil
+ipa	ResidentEvil.ipa
+app_category	public.app-category.games
+
+# ---- Versions ----
+build	v0	1.0.0	main=6bec9b23b09df46c315aa6f4bfacf91c	subsdk0=41097c438a36afd2e879fa6f5e0f0850	sdk=26ffb122262ca25e4c016c0af2f92a29
+package	v0
+shader_versions	v0
+
+# ---- Files ----
+# every module main imports from
+modules	main subsdk0 sdk
+romfs_marker	nativeNXx64/movie/01_b.mp4
+zip_store	.arc:.mfx:.mp4:.metallib
+
+# ---- Memory ----
+# main sets a heap of at most the pool − 64 MB: a 3328 MB heap region
+mem_reserve	0x100000000
+mem_alias	0x10000000
+mem_stack	0x10000000
+app_pool	0xCD500000
+# the NPDM declares 0 MB of system resource: IsVirtualAddressMemoryEnabled is false, as on Horizon (Big Brain Academy: Brain vs. Brain sets a heap only then)
+sys_resource	0x0
+
+# ---- Graphics ----
+# main has no data cache maintenance at all (no dc cvac / civac / ivac / cvau), as The Great Ace Attorney Chronicles: textures the CPU writes into cached pools are never flushed
+tex_flush_upload	on
+tex_dirty_upload	on
+
+# ---- Shader split ----
+shader_groups	/nativeNXx64/=nativenxx64
+shader_note	Resident Evil shaders

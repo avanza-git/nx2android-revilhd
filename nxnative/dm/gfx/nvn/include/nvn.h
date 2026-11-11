@@ -54,9 +54,8 @@ typedef struct {
 } NVNdeviceBuilder;
 
 typedef struct {
-    int numTiledLevels;                   // levels laid out in whole 64 KB tiles; the rest are the mip tail
-    int tileWidth, tileHeight, tileDepth; // one tile in texels
-    char reserved[16];
+    // TODO: reverse and define this as it looks like it's not an opaque type.
+    char dummy[1];
 } NVNtextureSparseTileLayout;
 
 typedef struct {

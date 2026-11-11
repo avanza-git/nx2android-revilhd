@@ -1,6 +1,6 @@
 # Pokémon Brilliant Diamond (`0100000011D90000`)
 
-Update 1.3.0 (v393216) over the base game. Unity 2019.4.27f1 IL2CPP, SDK 11.4.3, NVN, Wwise and FMOD. Modules `main`, `subsdk0` (NintendoSDK_movie) and `sdk`; the latter two are the builds used by [Metroid Dread](../010093801237C000/README.md). Plays on the Mac at 60 fps with 1.3.0. An unsigned IPA is built; iOS is untested.
+Update 1.3.0 (v393216) over the base game. Unity 2019.4.27f1 IL2CPP, SDK 11.4.3, NVN, Wwise and FMOD. Modules `main`, `subsdk0` (NintendoSDK_movie) and `sdk`; the latter two are the builds used by Metroid Dread. Plays on the Mac at 60 fps with 1.3.0. An unsigned IPA is built; iOS is untested.
 
 ## What it needs
 
@@ -52,13 +52,13 @@ Build with `scripts/build_ipa_from_nsp.py <NSP folder> -k <prod.keys> --platform
 
 ## Found on this game
 
-- SDK 11.4.3's instance of [the SDK's address-region node area](../../../docs/reference/memory.md#the-sdks-address-region-node-area), with the cut keyed by the shared SDK build ID.
-- Legacy kernels held directly in [Unity ComputeShader objects](../../../docs/reference/shaders.md#unity-computeshader-objects).
-- [VP8 decoding through libvpx](../../../docs/reference/movies.md#vp8-uses-the-same-libvpx-worker-and-output-paths).
-- [Zero initialization of depth and stencil textures](../../../docs/reference/rendering.md#new-textures-start-as-zero).
-- [iOS layouts: portrait, a half-folded Duo, iPad windows](../../../docs/reference/rendering.md#ios-layouts-portrait-a-half-folded-duo-ipad-windows), from PR #683 (iPhone Duo).
-- [AudioOut stop releases pending buffers](../../../docs/reference/audio.md#stopping-an-audioout-releases-its-pending-buffers), reported on 1.0.0 in PR #190.
-- [Unity's integer target frame rate](../../../docs/reference/frame-rate.md#unitys-integer-target-frame-rate).
+- SDK 11.4.3's instance of the SDK's address-region node area, with the cut keyed by the shared SDK build ID.
+- Legacy kernels held directly in Unity ComputeShader objects.
+- VP8 decoding through libvpx.
+- Zero initialization of depth and stencil textures.
+- iOS layouts: portrait, a half-folded Duo, iPad windows, from PR #683 (iPhone Duo).
+- AudioOut stop releases pending buffers, reported on 1.0.0 in PR #190.
+- Unity's integer target frame rate.
 
 ## Open
 

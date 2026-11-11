@@ -19,6 +19,9 @@ class AdaptiveFrameRate(unittest.TestCase):
         hint, shown = controller.index('// The frame\'s work to the CPU hint'), controller.index('// The frames\' time on screen')
         controller = controller[:hint] + controller[shown:]   # without hint_report: the Android hint API (H, g_hint), called only from dm_perf_frame
         harness = r'''
+#include "frame_limit.h"
+int dm_android_frame_limit(void) { return -1; }
+int dm_fps_cutscene(void) { return 0; }
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -66,7 +69,7 @@ int main(int argc, char **argv) {
             c = Path(tmp) / 'check.c'
             exe = Path(tmp) / 'check'
             c.write_text(harness, encoding='utf-8')
-            result = subprocess.run([cc, '-std=gnu11', '-Wall', '-Wextra', '-Werror', str(c), '-o', str(exe)], capture_output=True, text=True)
+            result = subprocess.run([cc, '-I' + str(SOURCE.parent), '-std=gnu11', '-Wall', '-Wextra', '-Werror', str(c), '-o', str(exe)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             for args in ([], ['median']):
                 with self.subTest(policy=args or 'default'):

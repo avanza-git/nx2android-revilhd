@@ -5,7 +5,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
-os.environ.setdefault('NX2A_HOME', tempfile.mkdtemp(prefix='nx2a_test_home_'))
+os.environ.setdefault('RE_NATIVE_HOME', tempfile.mkdtemp(prefix='nx2a_test_home_'))
 from porter import datapack, driver, paths   # noqa: E402
 from porter.adb import Adb                     # noqa: E402
 from porter.upstream import BuildError         # noqa: E402
@@ -222,6 +222,36 @@ class HostTest(unittest.TestCase):   # porter host's update(): its refusals, the
             from porter.pipeline import UI_FONT
             with zipfile.ZipFile(apk) as z: self.assertEqual(z.read('assets/font/ui.bin'), UI_FONT.read_bytes())   # the overlay font an older port lacks
             self.assertEqual(dev.ops[-3:], ['pull', 'am', 'install'])
+
+    def test_resident_evil_update_and_missing_game_patches(self):
+        import hashlib
+        from porter.upstream import game
+        tid = '010050F00BC1A000'; package = 'org.nx2a.t010050f00bc1a000'
+        tools = REPO / 'nxnative/dm/tools'
+        own = f'../games/{tid}/patches.py'
+        files = {'nx2a-data.json': json.dumps(dict(title_id=tid, package=package,
+                    version='v0', profile_h=self.host.profile_hash(tid)))}
+        sources = ('patch_nso.py', 'nso_code.py', 'nso_asm.py', 'sdk_patches.py', own)
+        files['mods/build_src.sha256'] = ''.join(
+            f'{hashlib.sha256((tools / r).read_bytes()).hexdigest()}  {r}\n' for r in sources)
+        tables = [self.host._tables(tools / r) for r in ('sdk_patches.py', own)]
+        for module, bid in game.load(tid).builds()['v0'].items():
+            if module == 'display': continue
+            for field, suffix in (('CUTS', 'cuts'), ('OBS', 'obs')):
+                rows = [row for table in tables for row in table[field].get(bid, [])]
+                files[f'mods/{module}.{suffix}.tsv'] = f'# BUILD_ID\t{bid}\n' + ''.join(
+                    f'{offset:#x}\t{old}\t{new}\t{why}\n' for offset, old, new, why in rows)
+        dev = HostDevice(self.t / 'a.apk', files)
+        result = self.host.update(dev, package)
+        self.assertEqual(result['title_id'], tid)
+        self.assertEqual(dev.ops[-3:], ['pull', 'am', 'install'])
+        self.assertIsNotNone(dev.installed_apk)
+
+        # An older export without the game's save/movie/door patches needs a full port.
+        files['mods/build_src.sha256'] = '\n'.join(
+            line for line in files['mods/build_src.sha256'].splitlines() if own not in line)
+        self.builds.clear()
+        self.refused(files, own)
 
 
 if __name__ == '__main__':
