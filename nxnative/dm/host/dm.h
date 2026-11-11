@@ -102,13 +102,17 @@ enum { OBS_MOVIE_RING_LINK = 19, OBS_MOVIE_RING_UNLINK = 20,   // Metroid Dread 
        OBS_RE_MOVIE_START = 22, OBS_RE_MOVIE_END = 23,          // Resident Evil 1.0.0 movie lifetime
        OBS_RE_DOOR_EXEC = 24, OBS_RE_DOOR_FINAL = 25,        // Resident Evil door animation state machine
        OBS_RE_SAVE_TICK = 26,                                    // Resident Evil aGame::move: the pause menu's Save game (hle_re_save.c)
-       OBS_MAX = 27 };
+       OBS_RE_GIVE_DAMAGE = 27, OBS_RE_LIFE_DOWN = 28, OBS_RE_LIFE_DOWN2 = 29,   // Resident Evil's Cheats tab (hle_re_cheat.c): cAttack::giveDamage, uCharacterBase::Life_down_set(2),
+       OBS_RE_SHOT = 30, OBS_RE_USE_BULLET = 31, OBS_RE_USE_ITEM = 32,           // uWeapon::requestShot / useBullte, sGameManager::useHolderItem
+       OBS_MAX = 33 };
 // Resident Evil's Save game (hle_re_save.c, android.tsv save_anywhere): what the pause menu shows
 enum { RE_SAVE_IDLE, RE_SAVE_REFUSED, RE_SAVE_OPEN, RE_SAVE_CLOSED };
 int dm_re_save_request(void);    // 1: the save screen opens when the game goes on; 0: not here (not in free play)
 int dm_re_save_safe(void);       // the last frame before the menu opened was free play
 int dm_re_save_note(void);       // RE_SAVE_*
 void dm_re_save_note_clear(void);
+// Resident Evil's Cheats tab (hle_re_cheat.c, android.tsv cheats): the switches, in the menu's order (front_android.c dm_android_cheat, settings.txt cheat_<name>=)
+enum { RE_CHEAT_HEALTH, RE_CHEAT_AMMO, RE_CHEAT_OHK, RE_CHEAT_RIBBON, RE_CHEAT_N };
 void gate_obs_set(int id, void (*fn)(const uint64_t *regs));
 int gate_obs_present(int id);
 uint64_t now_ns(void);

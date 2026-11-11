@@ -81,6 +81,10 @@ int main(void) {
 #include "frame_limit.h"
 #define DM_ANDROID_SKIP_DOORS 1
 #define DM_ANDROID_FRAME_LIMIT 1
+#define DM_ANDROID_CHEATS 1
+enum { RE_CHEAT_HEALTH, RE_CHEAT_AMMO, RE_CHEAT_OHK, RE_CHEAT_RIBBON, RE_CHEAT_N };
+static _Atomic int g_set_cheat[RE_CHEAT_N];
+static const char *const CHEAT_KEYS[RE_CHEAT_N]={"cheat_health","cheat_ammo","cheat_ohk","cheat_ribbon"};
 #define OV_OPACITY_MIN 20
 #define OV_OPACITY_MAX 80
 #define OVE_SCALE_MIN 0.5f
@@ -108,6 +112,12 @@ int main(int argc,char **argv) {
     // the pause menu's Picture: each choice kept; an unknown value is fit
     for(int m=0;m<OV_PIC_N;m++) { g_set_picture=m; settings_save(); g_set_picture=9; settings_load(); assert(g_set_picture==m); }
     f=fopen(path,"w"); assert(f); fprintf(f,"picture=7\n"); fclose(f); g_set_picture=OV_PIC_ZOOM; settings_load(); assert(g_set_picture==OV_PIC_FIT);
+    // Resident Evil's Cheats: off until chosen, each switch kept on its own, anything but 1 off; a key that only starts like one is not one
+    f=fopen(path,"w"); assert(f); fprintf(f,"fps=1\n"); fclose(f); settings_load(); for(int c=0;c<RE_CHEAT_N;c++) assert(!g_set_cheat[c]);
+    for(int m=0;m<16;m++) { for(int c=0;c<RE_CHEAT_N;c++) g_set_cheat[c]=m>>c&1; settings_save(); for(int c=0;c<RE_CHEAT_N;c++) g_set_cheat[c]=7; settings_load(); for(int c=0;c<RE_CHEAT_N;c++) assert(g_set_cheat[c]==(m>>c&1)); }
+    f=fopen(path,"w"); assert(f); fprintf(f,"cheat_health=2\ncheat_ammo=1\ncheat_ohkx=1\ncheat_ribbon=-1\n"); fclose(f);
+    for(int c=0;c<RE_CHEAT_N;c++) g_set_cheat[c]=0;
+    settings_load(); assert(!g_set_cheat[RE_CHEAT_HEALTH] && g_set_cheat[RE_CHEAT_AMMO] && !g_set_cheat[RE_CHEAT_OHK] && !g_set_cheat[RE_CHEAT_RIBBON]);
 }
 '''
         with tempfile.TemporaryDirectory() as tmp:

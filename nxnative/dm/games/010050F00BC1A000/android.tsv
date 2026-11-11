@@ -26,3 +26,8 @@ skip_doors	1
 
 # The pause menu's Save game (Game tab): the game's own save screen opened where the player stands, without a typewriter or an ink ribbon (hle_re_save.c).
 save_anywhere	1
+
+# The pause menu's Cheats tab: Infinite health, Infinite ammo, One-hit kills, Unlimited ink ribbons (hle_re_cheat.c; saved toggles, off by default).
+# 2026-11-12: TB320FC / Android 15, debug test build: the Cheats tab, its switches and settings.txt persistence checked; infinite health acted in play
+# ([cheat] infinite health: a hit on the player does no damage). Infinite ammo, one-hit kills and unlimited ink ribbons are unit-tested only, not yet seen on the device.
+cheats	1

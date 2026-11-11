@@ -107,35 +107,43 @@ void dm_overlay_theme_done(const ov_theme *t);   // the pixels are on the GPU: t
 
 // ---- the pause menu: a panel in the middle of the window: a row of tabs, the open tab's rows, and Resume. Everything is placed in a panel rectangle p
 // (x, y, width, height: the window's for touches, the raster's for drawing), so the touches and the drawing agree ----
-enum { OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_RUMBLE, OVM_FPS, OVM_MODE, OVM_EXPORT, OVM_IMPORT, OVM_PAD, OVM_LIMIT, OVM_DOORS, OVM_SAVE, OVM_PICTURE, OVM_RESUME, OVM_TAB, OVM_N };   // OVM_TAB: the tabs' row;
+enum { OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_RUMBLE, OVM_FPS, OVM_MODE, OVM_EXPORT, OVM_IMPORT, OVM_PAD, OVM_LIMIT, OVM_DOORS, OVM_SAVE, OVM_PICTURE,
+       OVM_CH_HEALTH, OVM_CH_AMMO, OVM_CH_OHK, OVM_CH_RIBBON, OVM_RESUME, OVM_TAB, OVM_N };   // OVM_TAB: the tabs' row;
             // OVM_EDIT: the layout editor; OVM_MODE: handheld (performance) or docked (resolution); OVM_EXPORT, OVM_IMPORT: the save manager (saves_android.c);
-            // OVM_PAD: a controller's face buttons by their position or by their label (front_android.c pad_labels)
+            // OVM_PAD: a controller's face buttons by their position or by their label (front_android.c pad_labels);
+            // OVM_CH_*: Resident Evil's Cheats tab (host/hle_re_cheat.c, android.tsv cheats), in RE_CHEAT_* order (dm.h)
+#if DM_ANDROID_CHEATS
+#define OVM_TABS 3
+#define OVM_CHEAT_TAB(...) , {OVM_CH_HEALTH, OVM_CH_AMMO, OVM_CH_OHK, OVM_CH_RIBBON, __VA_ARGS__}   // (the -1 that fill the row: no row)
+#else
 #define OVM_TABS 2
+#define OVM_CHEAT_TAB(...)
+#endif
 #if DM_ANDROID_SAVE_ANYWHERE   // OVM_SAVE: Resident Evil's Save game (host/hle_re_save.c)
 #define OVM_PER_TAB 8
-static const int OVM_TAB_ITEMS[OVM_TABS][OVM_PER_TAB] = {{OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_RUMBLE, OVM_PAD, -1, -1, -1}, {OVM_SAVE, OVM_FPS, OVM_MODE, OVM_PICTURE, OVM_EXPORT, OVM_IMPORT, DM_ANDROID_FRAME_LIMIT ? OVM_LIMIT : -1, DM_ANDROID_SKIP_DOORS ? OVM_DOORS : -1}};
+static const int OVM_TAB_ITEMS[OVM_TABS][OVM_PER_TAB] = {{OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_RUMBLE, OVM_PAD, -1, -1, -1}, {OVM_SAVE, OVM_FPS, OVM_MODE, OVM_PICTURE, OVM_EXPORT, OVM_IMPORT, DM_ANDROID_FRAME_LIMIT ? OVM_LIMIT : -1, DM_ANDROID_SKIP_DOORS ? OVM_DOORS : -1} OVM_CHEAT_TAB(-1, -1, -1, -1)};
 #elif DM_ANDROID_SKIP_DOORS
 #define OVM_PER_TAB 7
-static const int OVM_TAB_ITEMS[OVM_TABS][OVM_PER_TAB] = {{OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_RUMBLE, OVM_PAD, -1, -1}, {OVM_FPS, OVM_MODE, OVM_PICTURE, OVM_EXPORT, OVM_IMPORT, DM_ANDROID_FRAME_LIMIT ? OVM_LIMIT : -1, OVM_DOORS}};
+static const int OVM_TAB_ITEMS[OVM_TABS][OVM_PER_TAB] = {{OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_RUMBLE, OVM_PAD, -1, -1}, {OVM_FPS, OVM_MODE, OVM_PICTURE, OVM_EXPORT, OVM_IMPORT, DM_ANDROID_FRAME_LIMIT ? OVM_LIMIT : -1, OVM_DOORS} OVM_CHEAT_TAB(-1, -1, -1)};
 #else
 #define OVM_PER_TAB 6
-static const int OVM_TAB_ITEMS[OVM_TABS][OVM_PER_TAB] = {{OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_RUMBLE, OVM_PAD, -1}, {OVM_FPS, OVM_MODE, OVM_PICTURE, OVM_EXPORT, OVM_IMPORT, DM_ANDROID_FRAME_LIMIT ? OVM_LIMIT : -1}};   // -1: no row
+static const int OVM_TAB_ITEMS[OVM_TABS][OVM_PER_TAB] = {{OVM_OVERLAY, OVM_OPACITY, OVM_EDIT, OVM_RUMBLE, OVM_PAD, -1}, {OVM_FPS, OVM_MODE, OVM_PICTURE, OVM_EXPORT, OVM_IMPORT, DM_ANDROID_FRAME_LIMIT ? OVM_LIMIT : -1} OVM_CHEAT_TAB(-1, -1)};   // -1: no row
 #endif
 // OVM_PICTURE: how the game's picture fills the window (gfx_vk_present.c present_window): fit (aspect kept, black borders), stretch (the whole window, aspect not kept),
 // zoom (the whole window, aspect kept, the overflow cut off); settings.txt picture=0/1/2 (front_android.c dm_picture_mode)
 enum { OV_PIC_FIT, OV_PIC_STRETCH, OV_PIC_ZOOM, OV_PIC_N };
 int dm_picture_mode(void);
-static const char *const OVM_TAB_NAMES[OVM_TABS] = {"Gamepad", "Game"};
+static const char *const OVM_TAB_NAMES[3] = {"Gamepad", "Game", "Cheats"};   // (the first OVM_TABS)
 #define OVM_ROWS (OVM_PER_TAB + 2)   // the tabs, a tab's rows (as many for every tab: the panel keeps its size), Resume
-static inline int ov_menu_item(int tab, int row) { return row == 0 ? OVM_TAB : row == OVM_ROWS - 1 ? OVM_RESUME : row > 0 && row < OVM_ROWS - 1 ? OVM_TAB_ITEMS[tab & 1][row - 1] : -1; }
+static inline int ov_menu_item(int tab, int row) { return row == 0 ? OVM_TAB : row == OVM_ROWS - 1 ? OVM_RESUME : row > 0 && row < OVM_ROWS - 1 ? OVM_TAB_ITEMS[(unsigned)tab % OVM_TABS][row - 1] : -1; }
 #define OV_MENU_ROW 0.115f   // row height, of the window's height
 #define OV_MENU_W 0.95f      // panel width, of the window's height
 #define OV_MENU_PAD 0.03f
 #define OV_OPACITY_MIN 20    // the gamepad's opacity, percent (the Opacity slider, settings.txt opacity=)
 #define OV_OPACITY_MAX 80
 // what the menu shows (-1 = closed): bit 0 the gamepad is on, bit 1 rumble is on, bit 2 docked, bit 3 the frame rate shown, bits 4..7 the highlighted row + 1
-// (0 = none), bit 8 the open tab, bits 9..15 the opacity in percent, bits 20..23 the last export's outcome (OVX_*), bits 24..27 a count of exports (its name
-// changes with each). Bit 19: Start skips doors. Bits 29..30: frame limit choice (30, 60, unlimited). Bit 16: the text entry's panel instead (its edit count below); bit 17: the layout editor (OVE_ST_* below); bit 18: the save picker (OVS_ST)
+// (0 = none), bits 8 and 27 the open tab (its low and high bit), bits 9..15 the opacity in percent, bits 20..23 the last export's outcome (OVX_*), on the Cheats tab its four
+// switches instead (RE_CHEAT_* from bit 20), bits 24..26 a count of exports (its name changes with each). Bit 19: Start skips doors. Bits 29..30: frame limit choice (30, 60, unlimited). Bit 16: the text entry's panel instead (its edit count below); bit 17: the layout editor (OVE_ST_* below); bit 18: the save picker (OVS_ST)
 int dm_menu_state(void);
 enum { OVX_IDLE, OVX_BUSY, OVX_DONE, OVX_NOSAVE, OVX_FAILED };   // Export save: the button; copying; the export's name; the game has not saved yet; failed
 int dm_save_note(char *out, int cap);   // front_android.c: the outcome (OVX_*) and the last export's name, or why it failed

@@ -48,7 +48,7 @@ diff = subprocess.run(['git', '-C', str(R), 'log', '--format=%h', '--', 'nxnativ
 notes.append(f'{len(diff)} commits touch the shared core since the subtree')
 
 # 3. Game profiles: data only, android.tsv keys from the documented set
-KEYS = {'status', 'tested', 'package', 'orientation', 'requires', 'sysdata', 'setting', 'env', 'overlay', 'frame_limit', 'skip_doors', 'save_anywhere'}
+KEYS = {'status', 'tested', 'package', 'orientation', 'requires', 'sysdata', 'setting', 'env', 'overlay', 'frame_limit', 'skip_doors', 'save_anywhere', 'cheats'}
 STATUS = {'playable', 'wip', 'boots', 'experimental'}
 bad = []
 for f in files:

@@ -157,6 +157,9 @@ static _Atomic int g_set_overlay = 1, g_set_rumble = 1, g_set_fps;   // the game
 // -1 from the accessor leaves ports without this profile capability unchanged; 0 means unlimited.
 static _Atomic int g_set_skip_doors;
 int dm_android_skip_doors(void) { return DM_ANDROID_SKIP_DOORS && atomic_load(&g_set_skip_doors); }
+static _Atomic int g_set_cheat[RE_CHEAT_N];   // Resident Evil's Cheats tab (host/hle_re_cheat.c): RE_CHEAT_* switched on, settings.txt cheat_<name>=0/1
+static const char *const CHEAT_KEYS[RE_CHEAT_N] = {"cheat_health", "cheat_ammo", "cheat_ohk", "cheat_ribbon"};
+int dm_android_cheat(int c) { return DM_ANDROID_CHEATS && c >= 0 && c < RE_CHEAT_N && atomic_load(&g_set_cheat[c]); }
 static _Atomic int g_set_frame_limit = 30;
 static _Atomic int g_set_picture;   // OV_PIC_* (overlay_layout.h): the pause menu's Picture
 int dm_picture_mode(void) { return atomic_load(&g_set_picture); }
@@ -180,6 +183,8 @@ static void settings_load(void) {
     if (!f) return;
     while (fgets(line, sizeof line, f)) { int v; if (sscanf(line, "overlay=%d", &v) == 1) atomic_store(&g_set_overlay, v != 0); else if (sscanf(line, "rumble=%d", &v) == 1) atomic_store(&g_set_rumble, v != 0);
         else if (sscanf(line, "skip_doors=%d", &v) == 1) atomic_store(&g_set_skip_doors, v == 1);
+        else if (DM_ANDROID_CHEATS && !strncmp(line, "cheat_", 6)) { for (int c = 0; c < RE_CHEAT_N; c++) { size_t n = strlen(CHEAT_KEYS[c]);
+            if (!strncmp(line, CHEAT_KEYS[c], n) && line[n] == '=' && sscanf(line + n + 1, "%d", &v) == 1) atomic_store(&g_set_cheat[c], v == 1); } }
         else if (sscanf(line, "picture=%d", &v) == 1) atomic_store(&g_set_picture, v >= 0 && v < OV_PIC_N ? v : OV_PIC_FIT);
         else if (sscanf(line, "frame_limit=%d", &v) == 1) atomic_store(&g_set_frame_limit, dm_frame_limit_valid(v));
         else if (sscanf(line, "fps=%d", &v) == 1) atomic_store(&g_set_fps, v != 0);
@@ -205,6 +210,7 @@ static void settings_save(void) {
     fprintf(f, "overlay=%d\nrumble=%d\ndocked=%d\nfps=%d\nopacity=%d\ngrid=%d\n", atomic_load(&g_set_overlay), atomic_load(&g_set_rumble), dm_opmode() != 0, atomic_load(&g_set_fps),
             atomic_load(&g_set_opacity), atomic_load(&g_set_grid));
     if (DM_ANDROID_SKIP_DOORS) fprintf(f, "skip_doors=%d\n", atomic_load(&g_set_skip_doors));
+    if (DM_ANDROID_CHEATS) for (int c = 0; c < RE_CHEAT_N; c++) fprintf(f, "%s=%d\n", CHEAT_KEYS[c], atomic_load(&g_set_cheat[c]));
     if (DM_ANDROID_FRAME_LIMIT) fprintf(f, "frame_limit=%d\n", atomic_load(&g_set_frame_limit));
     fprintf(f, "picture=%d\n", atomic_load(&g_set_picture));
     if (atomic_load(&g_set_labels) >= 0) fprintf(f, "labels=%d\n", atomic_load(&g_set_labels));   // (only once the player chose: until then env.txt decides)
@@ -533,7 +539,7 @@ static void *temp_watch(void *a) {
     return NULL;
 }
 
-// ---- the pause menu: the game is held while it is open; touches and a controller's keys go to it. Two tabs (overlay_layout.h OVM_TAB_ITEMS): the gamepad's
+// ---- the pause menu: the game is held while it is open; touches and a controller's keys go to it. Two tabs, three with Resident Evil's Cheats (overlay_layout.h OVM_TAB_ITEMS): the gamepad's
 // settings (shown, opacity, the layout editor, rumble, a controller's face buttons) and the game's (the frame rate counter, the mode, exporting and importing the save);
 // Resume under them ----
 static _Atomic int g_menu_hi = -1, g_menu_tab;   // the highlighted row (a controller's selection, or the row a finger is on), -1 none; the open tab
@@ -542,13 +548,15 @@ static _Atomic int g_tx_ver;   // the text entry's edit count: the panel is draw
 static _Atomic int g_ed_st;    // the layout editor's state for dm_menu_state (overlay_layout.h OVE_ST)
 static _Atomic int g_sp_on, g_sp_hi = -1, g_sp_ver;   // the save picker (below): open, its highlighted row, its edit count
 static _Atomic int g_sv_st, g_sv_n;                   // Export save: its outcome (overlay_layout.h OVX_*), the exports made
+static int cheat_bits(void) { int b = 0; for (int c = 0; c < RE_CHEAT_N; c++) b |= atomic_load(&g_set_cheat[c]) << c; return b; }   // (overlay_layout.h dm_menu_state)
 int dm_menu_state(void) {
     if (atomic_load(&g_tx_on)) return 1 << 16 | (atomic_load(&g_tx_ver) & 0xffff);   // the text entry's panel (gfx_vk_present.c ov_text_panel)
     if (!atomic_load(&g_menu)) return -1;
     if (atomic_load(&g_edit)) return OVE_ST | atomic_load(&g_ed_st);
     if (atomic_load(&g_sp_on)) return OVS_ST | (atomic_load(&g_sp_hi) + 1) << 4 | (atomic_load(&g_sp_ver) & 255) << 20;
     return atomic_load(&g_set_overlay) | atomic_load(&g_set_rumble) << 1 | (dm_opmode() != 0) << 2 | atomic_load(&g_set_fps) << 3 | (atomic_load(&g_menu_hi) + 1) << 4 |
-           atomic_load(&g_menu_tab) << 8 | atomic_load(&g_set_opacity) << 9 | atomic_load(&g_sv_st) << 20 | (atomic_load(&g_sv_n) & 15) << 24 | pad_labels() << 28 | atomic_load(&g_set_skip_doors) << 19 | (atomic_load(&g_set_frame_limit) == 30 ? 0 : atomic_load(&g_set_frame_limit) == 60 ? 1 : 2) << 29;
+           (atomic_load(&g_menu_tab) & 1) << 8 | (atomic_load(&g_menu_tab) >> 1 & 1) << 27 | atomic_load(&g_set_opacity) << 9 | (atomic_load(&g_menu_tab) == 2 ? cheat_bits() : atomic_load(&g_sv_st)) << 20 |
+           (atomic_load(&g_sv_n) & 7) << 24 | pad_labels() << 28 | atomic_load(&g_set_skip_doors) << 19 | (atomic_load(&g_set_frame_limit) == 30 ? 0 : atomic_load(&g_set_frame_limit) == 60 ? 1 : 2) << 29;
 }
 int dm_overlay_fps(void) { return atomic_load(&g_set_fps) && !atomic_load(&g_menu); }   // gfx_vk_present.c draws the counter (not while the menu holds the game)
 static void menu_open(int hi) {
@@ -587,6 +595,10 @@ static void menu_do(int item) {
     if (item == OVM_OVERLAY) { atomic_store(&g_set_overlay, !atomic_load(&g_set_overlay)); atomic_store(&g_overlay, 1); settings_save(); }
     else if (item == OVM_RUMBLE) { int on = !atomic_load(&g_set_rumble); atomic_store(&g_set_rumble, on); dm_haptics_android_set(on); settings_save(); }
     else if (item == OVM_DOORS) { atomic_store(&g_set_skip_doors, !atomic_load(&g_set_skip_doors)); settings_save(); }
+    else if (item >= OVM_CH_HEALTH && item <= OVM_CH_RIBBON) {
+        int c = item - OVM_CH_HEALTH, on = !atomic_load(&g_set_cheat[c]); atomic_store(&g_set_cheat[c], on); settings_save();
+        LOG("[cheat] %s %s", CHEAT_KEYS[c], on ? "on" : "off");
+    }
     else if (item == OVM_LIMIT) { menu_frame_limit(1); settings_save(); }
     else if (item == OVM_PICTURE) { menu_picture(1); settings_save(); }
 #if DM_ANDROID_SAVE_ANYWHERE
